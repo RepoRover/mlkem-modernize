@@ -1,0 +1,18 @@
+[project]
+name = "mlkem-modernize"
+version = "0.1.0"
+requires-python = ">=3.14.7"
+dependencies = []
+
+[tool.uv.workspace]
+members = [
+    "device",
+    "cloud",
+    "gateway",
+]
+
+[dependency-groups]
+dev = [
+    "prek>=0.5.3",
+]
+

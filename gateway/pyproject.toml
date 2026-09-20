@@ -1,0 +1,12 @@
+[project]
+name = "gateway"
+version = "0.1.0"
+requires-python = ">=3.14.7"
+dependencies = []
+
+[project.scripts]
+gateway = "gateway:main"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"

@@ -1,0 +1,18 @@
+repos:
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.17
+    hooks:
+      - id: uv-lock
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff
+        name: ruff-lint
+        args: [--fix, --exit-non-zero-on-fix]
+
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.414
+    hooks:
+      - id: pyright
+        name: pyright
