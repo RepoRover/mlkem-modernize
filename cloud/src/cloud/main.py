@@ -20,7 +20,7 @@ def main() -> None:
         format="%(asctime)s service=cloud level=%(levelname)s %(message)s",
     )
     try:
-        settings = Settings()  # pyright: ignore[reportCallIssue]
+        settings = Settings.from_environment()
     except ValidationError as error:
         logger.error("event=settings_rejected errors=%s", validation_codes(error))
         raise SystemExit(1) from None
@@ -29,6 +29,9 @@ def main() -> None:
         host="0.0.0.0",
         port=8443,
         log_config=None,
+        limit_concurrency=64,
+        backlog=128,
+        timeout_graceful_shutdown=10,
         ssl_certfile=str(settings.tls_cert_file),
         ssl_keyfile=str(settings.tls_key_file),
         ssl_version=ssl.PROTOCOL_TLS_SERVER,

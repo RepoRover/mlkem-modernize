@@ -62,7 +62,10 @@ def _cloud_aad_values(gateway_id: str, kem_key_id: str, observation_id: str) -> 
 
 
 def cloud_aad(envelope: CloudEnvelope) -> bytes:
-    """Build Cloud-envelope additional authenticated data."""
+    """Expose the protocol AAD for independent envelope verification in tests.
+
+    Production encryption uses the same encoder before an envelope exists.
+    """
     return _cloud_aad_values(
         envelope.gateway_id, envelope.kem_key_id, envelope.observation_id
     )

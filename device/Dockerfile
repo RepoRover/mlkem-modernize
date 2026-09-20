@@ -14,4 +14,5 @@ COPY device/data device/data
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
+USER 10001:10001
 CMD ["python", "device/src/main.py"]

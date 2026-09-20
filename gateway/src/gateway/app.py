@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import ssl
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -29,6 +31,7 @@ from gateway.models import DeviceEnvelope
 
 logger = logging.getLogger("gateway")
 MAX_REQUEST_BODY_BYTES = 32 * 1024
+REQUEST_BODY_TIMEOUT_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -56,10 +59,14 @@ async def _request_body(request: Request) -> bytes:
             raise EnvelopeError("request content length is invalid") from error
 
     body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_REQUEST_BODY_BYTES:
-            raise EnvelopeError("request body exceeds protocol limit")
+    try:
+        async with asyncio.timeout(REQUEST_BODY_TIMEOUT_SECONDS):
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > MAX_REQUEST_BODY_BYTES:
+                    raise EnvelopeError("request body exceeds protocol limit")
+                body.extend(chunk)
+    except TimeoutError as error:
+        raise EnvelopeError("request body deadline expired") from error
     return bytes(body)
 
 
@@ -80,8 +87,11 @@ def _read_bearer_token(settings: Settings) -> str:
         token = settings.cloud_api_token_file.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError) as error:
         raise GatewayStartupError("Cloud bearer token could not be read") from error
-    if len(token.encode("utf-8")) < 32:
-        raise GatewayStartupError("Cloud bearer token is too short")
+    if (
+        len(token) < 32
+        or re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", token, re.ASCII) is None
+    ):
+        raise GatewayStartupError("Cloud bearer token has invalid length or syntax")
     return token
 
 
@@ -146,12 +156,12 @@ def create_app(
     """Create the Gateway API, optionally with injected test dependencies."""
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         loaded = service
         owns_client = False
         if loaded is None:
             try:
-                configured = settings or Settings()  # pyright: ignore[reportCallIssue]
+                configured = settings or Settings.from_environment()
                 loaded = build_service(configured)
                 owns_client = True
             except ValidationError as error:
@@ -264,6 +274,3 @@ def create_app(
         return JSONResponse(status_code=status_code, content=result.model_dump())
 
     return app
-
-
-app = create_app()

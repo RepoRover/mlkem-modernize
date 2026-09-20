@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import ssl
@@ -116,14 +115,31 @@ class CloudForwarder:
             )
             try:
                 async with asyncio.timeout(self._timeout_seconds):
-                    response = await self._client.post(
+                    async with self._client.stream(
+                        "POST",
                         self._cloud_url,
                         json=envelope.model_dump(),
                         headers={
                             "Authorization": f"Bearer {self._bearer_token}",
                             "Content-Type": "application/json",
+                            "Accept-Encoding": "identity",
                         },
-                    )
+                    ) as response:
+                        if (
+                            response.headers.get("content-encoding", "identity").lower()
+                            != "identity"
+                        ):
+                            raise PermanentCloudError(
+                                "Compressed Cloud responses are unsupported"
+                            )
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes(chunk_size=4096):
+                            if len(body) + len(chunk) > MAX_CLOUD_RESPONSE_BYTES:
+                                raise PermanentCloudError("Cloud response is too large")
+                            body.extend(chunk)
+                        bounded_response = httpx.Response(
+                            response.status_code, content=bytes(body)
+                        )
             except (httpx.RequestError, TimeoutError) as error:
                 if _certificate_error(error):
                     raise PermanentCloudError(
@@ -131,9 +147,9 @@ class CloudForwarder:
                     ) from error
                 action = CloudResponseAction.RETRY
             else:
-                action = classify_cloud_status(response.status_code)
+                action = classify_cloud_status(bounded_response.status_code)
                 if action is CloudResponseAction.ACCEPT:
-                    return self._validate_success(response, observation)
+                    return self._validate_success(bounded_response, observation)
                 if action is CloudResponseAction.REJECT:
                     raise PermanentCloudError("Cloud rejected Gateway request")
 
@@ -166,7 +182,7 @@ class CloudForwarder:
             raise PermanentCloudError("Cloud response is too large")
         try:
             result = CloudResult.model_validate_json(response.content)
-        except (ValidationError, json.JSONDecodeError) as error:
+        except ValidationError as error:
             raise PermanentCloudError("Cloud success response is malformed") from error
         expected_status = "stored" if response.status_code == 201 else "duplicate"
         if (

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from typing import Self
+
 from models import IDENTIFIER
 from pydantic import AnyHttpUrl, Field, FilePath, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +14,11 @@ class Settings(BaseSettings):
     """Validated Device environment settings."""
 
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=True)
+
+    @classmethod
+    def from_environment(cls) -> Self:
+        """Validate an environment snapshot using the configured field aliases."""
+        return cls.model_validate(dict(os.environ))
 
     device_id: str = Field(validation_alias="DEVICE_ID", pattern=IDENTIFIER)
     device_key_id: str = Field(validation_alias="DEVICE_KEY_ID", pattern=IDENTIFIER)

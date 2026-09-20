@@ -1,0 +1,10 @@
+# Local credentials, certificates, benchmark output and integration state
+.local/
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

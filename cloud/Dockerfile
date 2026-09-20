@@ -13,5 +13,6 @@ COPY cloud/src cloud/src
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/cloud/src" \
     PYTHONUNBUFFERED=1
+USER 10001:10001
 EXPOSE 8443
 CMD ["python", "-m", "cloud.main"]

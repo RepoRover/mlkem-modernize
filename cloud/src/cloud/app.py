@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
+import re
 import ssl
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey
 from fastapi import FastAPI, Request
@@ -28,6 +31,8 @@ from cloud.models import CloudEnvelope
 
 logger = logging.getLogger("cloud")
 MAX_REQUEST_BODY_BYTES = 32 * 1024
+REQUEST_BODY_TIMEOUT_SECONDS = 5
+BEARER_TOKEN = re.compile(r"[A-Za-z0-9._~+/-]+={0,}$", re.ASCII)
 
 
 @dataclass(frozen=True)
@@ -40,9 +45,9 @@ class CloudService:
     store: ObservationStore
 
 
-def _read_text(path: object, label: str) -> str:
+def _read_text(path: Path, label: str) -> str:
     try:
-        value = path.read_text(encoding="utf-8").strip()  # type: ignore[attr-defined]
+        value = path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError) as error:
         raise CloudStartupError(f"{label} could not be read") from error
     if not value:
@@ -62,8 +67,8 @@ def _validate_tls(settings: Settings) -> None:
 def build_service(settings: Settings) -> CloudService:
     """Load Cloud material and construct its PostgreSQL store."""
     token = _read_text(settings.gateway_api_token_file, "Gateway bearer token")
-    if len(token.encode()) < 32:
-        raise CloudStartupError("Gateway bearer token is too short")
+    if len(token) < 32 or BEARER_TOKEN.fullmatch(token) is None:
+        raise CloudStartupError("Gateway bearer token has invalid length or syntax")
     database_url = _read_text(settings.database_url_file, "database URL")
     _validate_tls(settings)
     return CloudService(
@@ -86,19 +91,26 @@ async def _request_body(request: Request) -> bytes:
         except ValueError as error:
             raise EnvelopeError("request content length is invalid") from error
     body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_REQUEST_BODY_BYTES:
-            raise EnvelopeError("request body exceeds protocol limit")
+    try:
+        async with asyncio.timeout(REQUEST_BODY_TIMEOUT_SECONDS):
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > MAX_REQUEST_BODY_BYTES:
+                    raise EnvelopeError("request body exceeds protocol limit")
+                body.extend(chunk)
+    except TimeoutError as error:
+        raise EnvelopeError("request body deadline expired") from error
     return bytes(body)
 
 
 def _authorized(request: Request, token: str) -> bool:
     supplied = request.headers.get("authorization", "")
     prefix = "Bearer "
-    return supplied.startswith(prefix) and hmac.compare_digest(
-        supplied[len(prefix) :], token
-    )
+    if not supplied.startswith(prefix):
+        return False
+    candidate = supplied[len(prefix) :]
+    if BEARER_TOKEN.fullmatch(candidate) is None:
+        return False
+    return hmac.compare_digest(candidate.encode("ascii"), token.encode("utf-8"))
 
 
 def create_app(
@@ -107,11 +119,11 @@ def create_app(
     """Create the Cloud API, optionally with injected test dependencies."""
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         loaded = service
         if loaded is None:
             try:
-                loaded = build_service(settings or Settings())  # pyright: ignore[reportCallIssue]
+                loaded = build_service(settings or Settings.from_environment())
             except ValidationError as error:
                 logger.error(
                     "event=settings_rejected errors=%s", validation_codes(error)
@@ -120,6 +132,10 @@ def create_app(
             except CloudStartupError as error:
                 logger.error("event=startup_rejected error=%s", error)
                 raise RuntimeError("Cloud startup material is invalid") from None
+        try:
+            await loaded.store.start()
+        except DatabaseError:
+            raise RuntimeError("Cloud database initialization failed") from None
         app.state.service = loaded
         logger.info(
             "event=settings_keys_loaded gateway_id=%s key_ids=%s",
@@ -130,6 +146,10 @@ def create_app(
         try:
             yield
         finally:
+            try:
+                await loaded.store.close()
+            except TimeoutError:
+                logger.warning("event=database_cleanup_timeout")
             logger.info("event=service_stopping")
 
     app = FastAPI(title="ML-KEM Modernize Cloud", lifespan=lifespan)
@@ -203,6 +223,3 @@ def create_app(
         )
 
     return app
-
-
-app = create_app()

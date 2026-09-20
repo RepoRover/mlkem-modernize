@@ -59,7 +59,7 @@ def main() -> None:
         format="%(asctime)s service=device level=%(levelname)s %(message)s",
     )
     try:
-        settings = Settings()  # pyright: ignore[reportCallIssue]
+        settings = Settings.from_environment()
     except ValidationError as error:
         logger.error("event=settings_rejected errors=%s", validation_codes(error))
         raise SystemExit(1) from None

@@ -18,6 +18,12 @@ class MemoryStore:
     def __init__(self) -> None:
         self.rows: dict[str, Observation] = {}
 
+    async def start(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
     async def health(self) -> bool:
         return True
 
@@ -98,7 +104,7 @@ def test_authentication_precedes_parsing_and_unknown_key_rejected() -> None:
     asyncio.run(scenario())
 
 
-def test_ciphertext_and_authenticated_metadata_tampering_rejected() -> None:
+def test_ciphertext_tampering_rejected() -> None:
     async def scenario() -> None:
         private_key = MLKEM768PrivateKey.generate()
         service = CloudService(GATEWAY_ID, TOKEN, {KEY_ID: private_key}, MemoryStore())

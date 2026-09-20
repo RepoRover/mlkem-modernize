@@ -1,0 +1,146 @@
+name: mlkem-modernize
+
+x-runtime: &runtime
+  user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+  read_only: true
+  tmpfs: ["/tmp:size=16m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+
+services:
+  bootstrap:
+    build: {context: ., dockerfile: tools/Dockerfile}
+    profiles: [tools]
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./.local/material:/material
+
+  postgres:
+    image: postgres:17.6-bookworm
+    environment:
+      POSTGRES_USER: weather
+      POSTGRES_DB: weather
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./.local/material/postgres.password:/run/secrets/postgres-password:ro
+      - ./cloud/schema.sql:/docker-entrypoint-initdb.d/observations.sql:ro
+    networks: [cloud_net]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U weather -d weather"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  cloud:
+    <<: *runtime
+    build: {context: ., dockerfile: cloud/Dockerfile}
+    environment:
+      GATEWAY_ID: gateway-001
+      GATEWAY_API_TOKEN_FILE: /run/secrets/gateway.token
+      MLKEM_PRIVATE_KEYS_DIR: /run/secrets/active
+      DATABASE_URL_FILE: /run/secrets/database.url
+      TLS_CERT_FILE: /run/secrets/tls.crt
+      TLS_KEY_FILE: /run/secrets/tls.key
+    volumes:
+      - ./.local/material/gateway.token:/run/secrets/gateway.token:ro
+      - ./.local/material/active:/run/secrets/active:ro
+      - ./.local/material/database.url:/run/secrets/database.url:ro
+      - ./.local/material/cloud/tls.crt:/run/secrets/tls.crt:ro
+      - ./.local/material/cloud/tls.key:/run/secrets/tls.key:ro
+    networks: [cloud_net]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import ssl,urllib.request; urllib.request.urlopen('https://localhost:8443/healthz',context=ssl.create_default_context(cafile='/run/secrets/tls.crt'),timeout=4)"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  gateway:
+    <<: *runtime
+    build: {context: ., dockerfile: gateway/Dockerfile}
+    environment:
+      DEVICE_ID: weather-station-001
+      DEVICE_KEY_ID: device-key-001
+      DEVICE_KEY_FILE: /run/secrets/device.key
+      GATEWAY_ID: gateway-001
+      CLOUD_URL: https://cloud:8443/v1/observations
+      CLOUD_CA_CERT_FILE: /run/secrets/ca.crt
+      CLOUD_API_TOKEN_FILE: /run/secrets/gateway.token
+      MLKEM_KEY_ID: ${MLKEM_KEY_ID:-cloud-kem-001}
+      MLKEM_PUBLIC_KEY_FILE: /run/secrets/cloud.pub
+      TLS_CERT_FILE: /run/secrets/tls.crt
+      TLS_KEY_FILE: /run/secrets/tls.key
+      CLOUD_FORWARD_DEADLINE_SECONDS: "30"
+    volumes:
+      - ./.local/material/device.key:/run/secrets/device.key:ro
+      - ./.local/material/gateway.token:/run/secrets/gateway.token:ro
+      - ./.local/material/public/${MLKEM_KEY_ID:-cloud-kem-001}.pub:/run/secrets/cloud.pub:ro
+      - ./.local/material/ca/ca.crt:/run/secrets/ca.crt:ro
+      - ./.local/material/gateway/tls.crt:/run/secrets/tls.crt:ro
+      - ./.local/material/gateway/tls.key:/run/secrets/tls.key:ro
+    networks: [device_net, cloud_net]
+    depends_on:
+      cloud: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import ssl,urllib.request; urllib.request.urlopen('https://localhost:8443/healthz',context=ssl.create_default_context(cafile='/run/secrets/tls.crt'),timeout=4)"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  device:
+    <<: *runtime
+    build: {context: ., dockerfile: device/Dockerfile}
+    cpus: 0.25
+    mem_limit: 128m
+    environment:
+      DEVICE_ID: weather-station-001
+      DEVICE_KEY_ID: device-key-001
+      DEVICE_KEY_FILE: /run/secrets/device.key
+      GATEWAY_URL: https://gateway:8443/v1/observations
+      GATEWAY_TIMEOUT_SECONDS: "35"
+      CA_CERT_FILE: /run/secrets/ca.crt
+      WEATHER_CSV_FILE: /app/device/data/weather_data.csv
+      SEND_INTERVAL_SECONDS: ${SEND_INTERVAL_SECONDS:-1}
+      RETRY_INITIAL_SECONDS: "0.25"
+      RETRY_MAX_SECONDS: "2"
+    volumes:
+      - ./.local/material/device.key:/run/secrets/device.key:ro
+      - ./.local/material/ca/ca.crt:/run/secrets/ca.crt:ro
+    networks: [device_net]
+    depends_on:
+      gateway: {condition: service_healthy}
+
+  integration:
+    <<: *runtime
+    profiles: [tools]
+    build: {context: ., dockerfile: tools/Dockerfile}
+    entrypoint: [python, -m, pytest, -q, -p, no:cacheprovider, tests/integration]
+    environment:
+      RUN_INTEGRATION: "1"
+      MATERIAL_DIR: /material
+    # This is an explicit test tool, not a runtime service: it needs staged keys
+    # and CA signing material for negative TLS and rotation tests.
+    volumes:
+      - ./.local/material:/material:ro
+    networks: [device_net, cloud_net]
+    depends_on:
+      gateway: {condition: service_healthy}
+
+  benchmark:
+    <<: *runtime
+    profiles: [tools]
+    build: {context: ., dockerfile: tools/Dockerfile}
+    entrypoint: [python, tools/benchmark.py]
+    network_mode: none
+
+networks:
+  device_net: {internal: true}
+  cloud_net: {internal: true}
+volumes:
+  postgres_data:

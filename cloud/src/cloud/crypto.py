@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import re
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
@@ -12,7 +13,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from pydantic import ValidationError
 
 from cloud.errors import CloudStartupError, EnvelopeError, ObservationValidationError
-from cloud.models import MAX_CIPHERTEXT_BYTES, CloudEnvelope, Observation
+from cloud.models import IDENTIFIER, MAX_CIPHERTEXT_BYTES, CloudEnvelope, Observation
 
 MLKEM_CIPHERTEXT_BYTES = 1088
 
@@ -56,7 +57,7 @@ def load_private_keys(directory: Path) -> dict[str, MLKEM768PrivateKey]:
         raise CloudStartupError("ML-KEM key directory could not be read") from error
     for path in paths:
         key_id = path.stem
-        if not key_id or any(not (char.isalnum() or char in "._:-") for char in key_id):
+        if re.fullmatch(IDENTIFIER, key_id) is None:
             raise CloudStartupError("ML-KEM private key filename is invalid")
         try:
             loaded = serialization.load_pem_private_key(

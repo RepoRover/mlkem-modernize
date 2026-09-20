@@ -7,7 +7,6 @@ import math
 import random
 import ssl
 from enum import StrEnum
-from typing import Any
 
 import httpx
 from config import Settings
@@ -16,6 +15,7 @@ from errors import DeviceError
 from models import Observation
 
 logger = logging.getLogger("device")
+MAX_GATEWAY_RESPONSE_BYTES = 32 * 1024
 
 
 class DeliveryAction(StrEnum):
@@ -27,24 +27,30 @@ class DeliveryAction(StrEnum):
     FATAL = "fatal"
 
 
+def response_status(body: object) -> str | None:
+    """Extract a string status only from a JSON object with the expected field."""
+    match body:
+        case {"status": str() as status}:
+            return status
+        case _:
+            return None
+
+
 def classify_response(
-    status_code: int, body: Any, observation_id: str
+    status_code: int, body: object, observation_id: str
 ) -> DeliveryAction:
     """Classify one Gateway response according to the retry contract."""
     if status_code in (200, 201):
-        if (
-            isinstance(body, dict)
-            and body.get("observation_id") == observation_id
-            and body.get("status") in ("stored", "duplicate")
-        ):
-            return DeliveryAction.ACCEPT
-        return DeliveryAction.FATAL
+        match body:
+            case {
+                "observation_id": str() as response_id,
+                "status": "stored" | "duplicate",
+            } if response_id == observation_id:
+                return DeliveryAction.ACCEPT
+            case _:
+                return DeliveryAction.FATAL
     if status_code in (408, 429) or status_code >= 500:
-        if (
-            status_code == 502
-            and isinstance(body, dict)
-            and body.get("status") == "upstream_rejected"
-        ):
+        if status_code == 502 and response_status(body) == "upstream_rejected":
             return DeliveryAction.FATAL
         return DeliveryAction.RETRY
     if status_code in (401, 403):
@@ -85,15 +91,30 @@ async def deliver(
     """Deliver one observation, retrying transient failures indefinitely."""
     retry = 0
     while True:
-        body: Any = None
+        body: object = None
         envelope = encrypt_observation(observation, settings.device_key_id, key)
         try:
             async with asyncio.timeout(settings.gateway_timeout_seconds):
-                response = await client.post(
-                    str(settings.gateway_url), json=envelope.model_dump()
-                )
+                async with client.stream(
+                    "POST",
+                    str(settings.gateway_url),
+                    json=envelope.model_dump(),
+                    headers={"Accept-Encoding": "identity"},
+                ) as response:
+                    if (
+                        response.headers.get("content-encoding", "identity").lower()
+                        != "identity"
+                    ):
+                        raise DeviceError(
+                            "Compressed Gateway responses are unsupported"
+                        )
+                    content = bytearray()
+                    async for chunk in response.aiter_bytes(chunk_size=4096):
+                        if len(content) + len(chunk) > MAX_GATEWAY_RESPONSE_BYTES:
+                            raise DeviceError("Gateway response is too large")
+                        content.extend(chunk)
             try:
-                body = response.json()
+                body = json.loads(content)
             except json.JSONDecodeError, UnicodeDecodeError:
                 body = None
             action = classify_response(
@@ -108,7 +129,7 @@ async def deliver(
             logger.info(
                 "event=observation_accepted observation_id=%s result=%s",
                 observation.observation_id,
-                body.get("status") if isinstance(body, dict) else "accepted",
+                response_status(body),
             )
             return True
         if action is DeliveryAction.SKIP:

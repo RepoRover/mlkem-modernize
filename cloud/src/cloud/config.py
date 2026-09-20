@@ -1,6 +1,8 @@
 """Cloud environment configuration."""
 
+import os
 from pathlib import Path
+from typing import Self
 
 from pydantic import DirectoryPath, Field, FilePath
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +14,11 @@ class Settings(BaseSettings):
     """Validated Cloud runtime settings."""
 
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=True)
+
+    @classmethod
+    def from_environment(cls) -> Self:
+        """Validate an environment snapshot using the configured field aliases."""
+        return cls.model_validate(dict(os.environ))
 
     gateway_id: str = Field(validation_alias="GATEWAY_ID", pattern=IDENTIFIER)
     gateway_api_token_file: FilePath = Field(validation_alias="GATEWAY_API_TOKEN_FILE")

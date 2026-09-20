@@ -32,7 +32,7 @@ class PermanentCloudError(GatewayError):
 
 
 def validation_codes(error: ValidationError) -> str:
-    """Return field names and error codes without rejected input values."""
+    """Return bounded library error codes, never attacker-controlled locations."""
     return ",".join(
-        f"{'.'.join(map(str, item['loc']))}:{item['type']}" for item in error.errors()
-    )
+        sorted({item["type"] for item in error.errors(include_input=False)})
+    )[:512]
