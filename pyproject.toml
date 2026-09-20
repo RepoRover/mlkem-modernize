@@ -7,10 +7,10 @@ dependencies = []
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-extraPaths = ["device/src"]
+extraPaths = ["device/src", "gateway/src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["device/src"]
+pythonpath = ["device/src", "gateway/src"]
 
 [tool.uv.workspace]
 members = [

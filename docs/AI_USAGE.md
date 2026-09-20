@@ -1,5 +1,32 @@
 # AI Usage Log
 
+## 2026-09-20 — Gateway implementation and Device integration
+
+### Prompt
+
+> `@GOAL.md @docs/PRD.md @docs/FRD.md`. The legacy device should now be implemented, implement the gateway and make sure its integration works with the legacy device.
+
+### Relevant result
+
+Implemented the Gateway HTTPS application with bounded request parsing, strict Device-envelope validation, AES-256-GCM authentication/decryption, plaintext Observation validation, fresh ML-KEM-768 encapsulation and HKDF/AES-256-GCM Cloud envelopes, bearer-authenticated Cloud forwarding, bounded retry/deadline behavior, health reporting, sanitized logs, validated startup material, and a standalone Docker image.
+
+Added an integration test that invokes the existing Device delivery code against the Gateway ASGI application, decrypts the forwarded envelope with a test Cloud ML-KEM private key, and verifies that a transient Cloud failure causes a fresh encapsulation before successful Device acknowledgement. Additional checks cover Device ciphertext tampering and permanent Cloud rejection propagation.
+
+### Decisions
+
+- Kept Gateway code in a dedicated `gateway` package with focused configuration, model, cryptography, forwarding, API, and process-entry modules.
+- Loaded a raw 1,184-byte pinned ML-KEM-768 public key and failed startup when ML-KEM or local key/TLS material is invalid.
+- Kept Device and Gateway models separate, as the requirements prohibit introducing a shared framework package; wire-level integration tests enforce compatibility.
+- Used dependency-injected HTTPX transports for deterministic integration coverage without implementing the still-separate Cloud service in this change.
+
+### Verification
+
+- `uv run pytest -q`: 11 passed.
+- `uvx ruff check .` and `uvx ruff format --check .`: passed.
+- `uvx pyright`: passed with zero errors.
+- Built `gateway/Dockerfile` successfully.
+- Ran an ML-KEM-768 encapsulation/decapsulation self-check and imported the Gateway application inside the built image.
+
 ## 2026-09-20 — Legacy Device modularization
 
 ### Prompt
