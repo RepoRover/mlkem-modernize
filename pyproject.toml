@@ -11,7 +11,7 @@ venv = ".venv"
 extraPaths = ["device/src", "gateway/src", "cloud/src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["device/src", "gateway/src", "cloud/src"]
+pythonpath = [".", "device/src", "gateway/src", "cloud/src"]
 
 [tool.uv.workspace]
 members = [
@@ -24,6 +24,8 @@ members = [
 dev = [
     "asyncpg-stubs>=0.31.3",
     "prek>=0.5.3",
+    "pyright>=1.1.414",
     "pytest>=9.0.2",
+    "ruff>=0.16.8",
 ]
 

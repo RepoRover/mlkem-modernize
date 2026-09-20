@@ -1,0 +1,16 @@
+name: Set up Python and uv
+description: Install the repository's pinned Python and uv versions
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version-file: .python-version
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v10
+      with:
+        version: "0.12.17"
+        enable-cache: true
+        cache-dependency-glob: uv.lock

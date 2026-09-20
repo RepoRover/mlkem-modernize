@@ -1,5 +1,28 @@
 # AI Usage Log
 
+## 2026-09-21 — CI workspace coverage
+
+### Prompt
+
+> I just introduced CI into this repository. Make it work for all the packages/services In this project. Upgrade versions where possible. Install the depepncies if needed as dev dependencies
+
+### Result and decisions
+
+- Reworked the workflow to install the complete locked uv workspace and run Ruff linting/formatting, strict Pyright checks, unit tests, and rendered Compose deployment validation.
+- Replaced the invalid root `uv build` step with a matrix that builds the Device, Gateway, Cloud, and shared Tools images independently.
+- Added Ruff and Pyright as development dependencies rather than relying on globally available or ephemeral tools, and updated the lockfile.
+- Fixed root test collection by explicitly adding the repository root to pytest's import paths.
+- Upgraded Checkout to v7, Setup Python to v7, Setup uv to v10, and the pinned uv binary in CI and all Dockerfiles to 0.12.17. Existing direct runtime and development dependencies were already current.
+- Made CI run on every push and pull request, added least-privilege repository permissions, concurrency cancellation, timeouts, uv caching, and non-fail-fast image builds.
+
+### Verification
+
+- Locked workspace sync, Ruff lint/format, strict Pyright, and all pre-commit hooks passed.
+- Pytest: **45 passed, 5 skipped**; the skipped tests require the explicit Docker integration stack.
+- Rendered Compose deployment validation passed.
+- Built all runtime and tool images successfully with the upgraded uv image.
+- `uv tree --outdated --depth 1` reported no outdated direct dependencies; `git diff --check` passed.
+
 ## Strict Pyright remediation
 
 ### Prompt

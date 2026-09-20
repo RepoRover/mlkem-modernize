@@ -1,5 +1,5 @@
 FROM python:3.14.7-slim-bookworm
-COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /uvx /bin/
 
 WORKDIR /app
 ENV UV_PYTHON_DOWNLOADS=never

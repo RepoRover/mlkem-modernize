@@ -75,11 +75,11 @@ stack and database remain available. Test records dated 2050 are separate from t
 For local development with Python 3.14.7+ and uv:
 
 ```sh
-uv sync --all-packages
+uv sync --all-packages --all-groups --locked
 uv run --no-sync pytest -q
-uvx ruff check .
-uvx ruff format --check .
-uvx pyright
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync pyright .
 ```
 
 The normal pytest command skips Docker-dependent integration tests; it includes
