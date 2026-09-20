@@ -1,5 +1,29 @@
 # AI Usage Log
 
+## 2026-09-20 — Cloud service implementation
+
+### Prompt
+
+> `@GOAL.md @docs/PRD.md @docs/FRD.md` The legacy and gateway should now have been implemented. Go ahead and implement the cloud service.
+
+### Relevant result
+
+Implemented the Cloud HTTPS application with bearer authentication before parsing or cryptographic work, bounded strict envelope validation, ML-KEM-768 key selection/decapsulation, HKDF-SHA-256 and AES-256-GCM decryption, plaintext observation validation, and idempotent PostgreSQL persistence. Added database-aware health reporting, current/previous key-directory loading for manual rotation, TLS 1.3 service startup, schema SQL, a standalone Docker image, and Cloud protocol tests.
+
+### Decisions
+
+- Used PEM PKCS#8 ML-KEM private keys named by validated key ID and loaded all active keys at startup to support rotation overlap.
+- Used short-lived asyncpg connections and one transaction per request, avoiding an additional pool dependency for this PoC.
+- Kept Cloud protocol models independent from Gateway models; cross-service tests generate envelopes through Gateway code and consume them through Cloud.
+- Returned generic errors and logged only allowlisted identifiers/outcomes rather than payloads or cryptographic details.
+
+### Verification
+
+- `uv run pytest -q`: 14 passed after `uv sync --all-packages`.
+- `uvx ruff check .` and `uvx ruff format --check .`: passed.
+- `uvx pyright`: passed with zero errors.
+- Built `cloud/Dockerfile` successfully.
+
 ## 2026-09-20 — Gateway implementation and Device integration
 
 ### Prompt

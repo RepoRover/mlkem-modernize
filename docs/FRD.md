@@ -45,7 +45,7 @@ Gateway is the only application attached to both networks. Device shall not have
 | HTTP clients | HTTPX |
 | Runtime validation | Pydantic v2 and pydantic-settings |
 | Cryptography | `cryptography` 47+ with ML-KEM-capable backend |
-| Database driver | psycopg 3, parameterized SQL |
+| Database driver | asyncpg, parameterized SQL |
 | Database | PostgreSQL |
 | Tests | pytest plus Docker Compose integration tests |
 | Serialization | UTF-8 JSON; RFC 4648 padded base64 for bytes |
