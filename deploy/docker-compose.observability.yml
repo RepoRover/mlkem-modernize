@@ -22,11 +22,21 @@ services:
   grafana:
     image: grafana/grafana:11.5.1
     environment:
-      # Anonymous viewer access: this is a throwaway test environment, and
-      # requiring a login would only get worked around with a shared password.
+      # Anonymous, read-only access, with no route to the admin account.
+      #
+      # GF_AUTH_DISABLE_LOGIN_FORM alone is NOT enough: it only hides the web
+      # form. HTTP basic auth stays on, so the built-in admin account remains
+      # reachable over the API with its publicly known default password, and
+      # port 3000 is published to the host. Disabling basic auth as well leaves
+      # the admin account with no way to authenticate at all.
+      #
+      # Nothing needs administering at runtime -- the datasource and dashboard
+      # are provisioned from files -- so removing admin access costs nothing
+      # and avoids introducing a secret everyone running the demo must manage.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
       GF_USERS_DEFAULT_THEME: dark
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

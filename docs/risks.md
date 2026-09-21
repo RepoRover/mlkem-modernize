@@ -96,3 +96,20 @@ Renamed to `pqcwire`, `pqcnode`, and `pqcsuite`, none of which are claimed.
 
 Recorded because the class of problem is easy to reintroduce: any new local
 package needs a name check before it is used.
+
+## R11 — Grafana exposed a default admin account (resolved)
+
+The observability overlay disabled Grafana's login form and presented the stack
+as anonymous and read-only. It was not: the form flag leaves HTTP basic auth
+enabled, so the built-in `admin` account stayed reachable over the API with its
+default password on a port published to the host. Verified exploitable —
+`GET /api/admin/settings` returned HTTP 200 with `admin:admin`.
+
+Resolved by disabling basic auth as well. The admin account now has no
+authentication path, and nothing requires one, since all Grafana configuration
+is provisioned from files.
+
+**Residual:** the overlay is a local demo stack. Exposing it beyond localhost
+would still leave anonymous read access to every metric, which reveals traffic
+rates and suite posture. Acceptable for a test environment; not for anything
+reachable from a network you do not control.

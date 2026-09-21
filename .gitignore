@@ -10,6 +10,13 @@ dist/
 build/
 *.egg-info/
 
+# Local environment overrides. The project deliberately needs no .env -- no
+# configuration value is secret -- so anything placed here is a local override
+# and must never be committed, in case it later holds a credential.
+.env
+.env.*
+!.env.example
+
 # Runtime artifacts — keys and wiretap captures must never be committed
 run/
 capture/

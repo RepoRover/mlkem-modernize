@@ -102,6 +102,48 @@ Renamed to `pqcwire`, `pqcnode`, `pqcsuite` — all verified unclaimed. Chosen
 over documenting the hazard: a known-and-unfixed supply-chain issue in a
 security project is a weaker outcome than a mechanical rename.
 
+## Found by a question about something else
+
+### Grafana shipped with a working default admin account
+
+A team member asked whether it was a problem that the repo has no `.env`. It
+mostly is not — no configuration value is secret, and crypto keys are generated
+at runtime rather than passed in. But auditing the question turned up the one
+place a credential genuinely mattered.
+
+The observability overlay set `GF_AUTH_DISABLE_LOGIN_FORM=true`, with a comment
+presenting the stack as anonymous and read-only. That flag only **hides the web
+form**. HTTP basic auth stayed enabled, so Grafana's built-in admin account
+remained reachable over the API with its publicly known default password — on a
+port published to the host.
+
+```
+GET /api/admin/settings   (admin:admin)  -> HTTP 200
+authenticated as: admin | grafana admin: True
+```
+
+Fixed by also setting `GF_AUTH_BASIC_ENABLED=false`, leaving the admin account
+with no way to authenticate. Verified in both directions, since the original
+mistake was assuming a flag did more than it does:
+
+```
+admin endpoint, admin:admin   -> HTTP 403   (was 200)
+dashboard, anonymous viewer   -> HTTP 200   (still works)
+write attempt, anonymous      -> HTTP 403   (refused)
+```
+
+Setting an admin password was **rejected** as the fix. It would have meant a
+hardcoded secret in a committed file, or a `.env` every teammate must create
+before the demo runs. Nothing needs administering at runtime — the datasource
+and dashboard are provisioned from files — so removing the access path is
+strictly better than guarding it.
+
+This is the same failure as [entry 02](02-a-false-claim-caught.md) in a
+different domain: a confident assumption about what something does, written
+into a comment that made it look deliberate, and never executed. The comment is
+the aggravating part — it did not merely fail to catch the problem, it would
+have reassured a reviewer that the problem had been considered.
+
 ## Smaller items, recorded for completeness
 
 **Generated code called a method it never defined.** `HybridServer.make_offer()`
