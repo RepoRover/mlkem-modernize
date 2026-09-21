@@ -62,6 +62,9 @@ warn_unreachable = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The service packages live at the repo root rather than under packages/, so
+# the root has to be importable for tests that exercise them directly.
+pythonpath = ["."]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: requires the docker compose stack to be running",
