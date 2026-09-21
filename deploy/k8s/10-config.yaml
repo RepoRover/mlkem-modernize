@@ -1,0 +1,23 @@
+# Non-secret configuration. Key material is NOT here -- it lives in the
+# `wx-keys` Secret, which CI creates at deploy time from freshly generated
+# development keys. Nothing cryptographic is ever committed to this repo.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wx-config
+  namespace: weather
+data:
+  LOG_LEVEL: "info"
+  KEYS_DIR: "/keys"
+  SESSION_TTL_SECONDS: "600"
+  MAX_RECORDS_PER_SESSION: "100"
+
+  # Hop 2 post-quantum policy. The cloud is the enforcement point and requires
+  # hybrid PQC; the gateway prefers it. See docs/MIGRATION.md for the phases.
+  CLOUD_PQC_POLICY: "require"
+  GATEWAY_PQC_POLICY: "prefer"
+
+  # Test environment replays the year quickly rather than at 1 reading / 2 s,
+  # so the smoke test has data to assert on within its timeout.
+  REPLAY_INTERVAL_SECONDS: "0.2"
+  LOOP_FOREVER: "true"

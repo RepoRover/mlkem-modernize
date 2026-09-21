@@ -16,9 +16,9 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
-from cryptography.exceptions import InvalidTag
 from fastapi.testclient import TestClient
 
 from services.cloud.main import create_app as create_cloud_app
@@ -219,7 +219,7 @@ def test_hybrid_key_is_agreed_by_both_sides():
     shared_server = cu.x25519_exchange(server_x, cu.x25519_public_from_bytes(client_x_pub))
     assert shared_client == shared_server
 
-    common = dict(
+    common: dict[str, Any] = dict(
         selected_suite=SUITE_HYBRID, client_id=GATEWAY_ID,
         offered_suites=[SUITE_HYBRID],
         client_nonce=cu.random_bytes(16), server_nonce=cu.random_bytes(16),
@@ -244,7 +244,7 @@ def test_hybrid_ikm_puts_mlkem_first():
     """
     ss_mlkem = cu.random_bytes(32)
     ss_x = cu.random_bytes(32)
-    common = dict(
+    common: dict[str, Any] = dict(
         selected_suite=SUITE_HYBRID, client_id=GATEWAY_ID,
         offered_suites=[SUITE_HYBRID],
         client_nonce=cu.random_bytes(16), server_nonce=cu.random_bytes(16),
@@ -260,7 +260,7 @@ def test_hybrid_ikm_puts_mlkem_first():
 
 def test_hybrid_is_safe_if_either_component_holds():
     """Changing EITHER half changes the key -- an attacker must break both."""
-    base = dict(
+    base: dict[str, Any] = dict(
         selected_suite=SUITE_HYBRID, client_id=GATEWAY_ID,
         offered_suites=[SUITE_HYBRID],
         client_nonce=cu.random_bytes(16), server_nonce=cu.random_bytes(16),
@@ -587,7 +587,8 @@ def test_stripping_the_hybrid_suite_breaks_the_signature(keys_dir: Path):
 
     tampered = dict(raw.hello)
     tampered["offered_suites"] = [SUITE_CLASSICAL]          # hybrid stripped
-    tampered["key_shares"] = {SUITE_CLASSICAL: raw.hello["key_shares"][SUITE_CLASSICAL]}
+    classical_share = raw.hello["key_shares"][SUITE_CLASSICAL]  # type: ignore[index]
+    tampered["key_shares"] = {SUITE_CLASSICAL: classical_share}
 
     response = cloud_http.post("/handshake", json=tampered)
 
@@ -1014,7 +1015,7 @@ def test_a_message_sent_on_the_wrong_direction_key_fails(keys_dir: Path):
 
 def test_direction_keys_are_independent_of_the_nonce_prefix():
     """Separation comes from the KDF label, not from distinct prefixes."""
-    common = dict(
+    common: dict[str, Any] = dict(
         selected_suite=SUITE_HYBRID,
         ss_mlkem768=cu.random_bytes(32), ss_classical=cu.random_bytes(32),
         client_id=GATEWAY_ID, offered_suites=[SUITE_HYBRID],
@@ -1093,7 +1094,7 @@ def test_kdf_binds_the_offered_suite_list():
     Even if an attacker could forge signatures, deriving with a different
     offer list yields a different key, so the session would fail at the AEAD.
     """
-    common = dict(
+    common: dict[str, Any] = dict(
         selected_suite=SUITE_HYBRID,
         ss_mlkem768=cu.random_bytes(32), ss_classical=cu.random_bytes(32),
         client_id=GATEWAY_ID,
@@ -1113,7 +1114,7 @@ def test_kdf_binds_the_offered_suite_list():
 
 def test_kdf_binds_the_mlkem_ciphertext_and_public_keys():
     """CLAUDE.md requires both public keys and the ciphertext in the transcript."""
-    base = dict(
+    base: dict[str, Any] = dict(
         selected_suite=SUITE_HYBRID,
         ss_mlkem768=cu.random_bytes(32), ss_classical=cu.random_bytes(32),
         client_id=GATEWAY_ID, offered_suites=[SUITE_HYBRID],
@@ -1148,7 +1149,7 @@ def test_kdf_binds_the_mlkem_ciphertext_and_public_keys():
 
 
 def test_derive_rejects_mismatched_secret_lengths():
-    common = dict(
+    common: dict[str, Any] = dict(
         client_id=GATEWAY_ID, offered_suites=[SUITE_HYBRID],
         client_nonce=cu.random_bytes(16), server_nonce=cu.random_bytes(16),
         client_share=KeyShare(), server_share=KeyShare(), mlkem768_ct=b"",

@@ -21,3 +21,6 @@ results/*-2*T*Z.json
 
 # Env overrides
 .env
+
+# Coverage report artifact (uploaded by CI, not tracked)
+coverage.xml

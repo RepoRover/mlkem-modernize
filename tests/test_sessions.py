@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,7 +22,7 @@ DEVICE_ID = "device-berlin-01"
 
 
 def _session(store: SessionStore, **overrides) -> ServerSession:
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         session_id=cu.random_bytes(16),
         client_id=DEVICE_ID,
         receiver=cu.AeadReceiver(cu.random_bytes(32), b"s" * 16, b"p" * 4),

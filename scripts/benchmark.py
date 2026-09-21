@@ -38,9 +38,10 @@ import platform
 import statistics
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -183,7 +184,7 @@ def bench_primitives(iterations: int) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
-def build_stack(keys_dir: Path):
+def build_stack(keys_dir: Path) -> tuple[Any, Any, Any, Any]:
     """Cloud + gateway + device client, all in-process."""
     from fastapi.testclient import TestClient
 
@@ -369,7 +370,7 @@ def bench_protocol(keys_dir: Path, iterations: int) -> dict[str, Any]:
     # Separate clients so each measures one suite only.
     from services.gateway.cloud_client import CloudClient as _CC
 
-    def make_client(policy: Policy) -> "_CC":
+    def make_client(policy: Policy) -> _CC:
         return _CC(
             base_url="http://cloud", gateway_id=GATEWAY_ID,
             signing_key=cu.load_private_key(keys_dir / "gateway_ecdsa_priv.pem"),
@@ -823,7 +824,7 @@ def main() -> int:
     key_establishment = bench_key_establishment(keys_dir, args.iterations)
 
     if args.skip_protocol:
-        protocol = {"handshakes": {}, "messages": {}}
+        protocol: dict[str, Any] = {"handshakes": {}, "messages": {}}
         print("  [3/4] protocol (skipped)")
     else:
         print("  [3/4] protocol round trips")

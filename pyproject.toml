@@ -1,0 +1,152 @@
+# Tooling configuration. There is no package to build here -- the services run
+# from source in the container -- so this file exists purely to give ruff, mypy,
+# bandit, pytest and coverage a single, reviewable home.
+
+# --------------------------------------------------------------------------
+# ruff -- lint + import sorting + format checking
+# --------------------------------------------------------------------------
+[tool.ruff]
+# 100 rather than the 88 default: this code carries long cryptographic
+# identifiers and long explanatory strings, and wrapping them at 88 hurt
+# readability more than it helped. Chosen once, applied everywhere.
+line-length = 100
+target-version = "py310"   # source stays 3.10-compatible; containers run 3.12
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes -- undefined names, unused imports
+    "I",         # isort -- import order
+    "UP",        # pyupgrade -- outdated syntax
+    "B",         # bugbear -- likely bugs
+    "C4",        # comprehensions
+    "SIM",       # simplifiable code
+    "S",         # flake8-bandit -- security rules, fast feedback before bandit
+    "DTZ",       # naive datetimes -- session expiry correctness depends on this
+    "ISC",       # implicit string concatenation
+    "TRY",       # exception antipatterns
+    "ARG",       # unused arguments
+    "RUF",       # ruff-specific, incl. RUF100 unused-noqa
+]
+ignore = [
+    # Long messages in `raise` are deliberate: rejection reasons are read by
+    # humans debugging a handshake, and hoisting them into variables hurts.
+    "TRY003",
+    # `raise` inside `try` is how the request handlers reject malformed input:
+    # parse in the try, raise HTTPException on the first bad field, catch the
+    # parse errors below. Restructuring to satisfy this would be worse.
+    "TRY301",
+    # "prefer TypeError for a type check" -- we deliberately raise ValueError
+    # for wrong-typed wire input, because every caller catches one exception
+    # type to return a clean 400. Reviewed; see wire.b64d.
+    "TRY004",
+    # else-after-return in the handlers reads better than the alternative.
+    "TRY300",
+    # Conflicts with the formatter.
+    "ISC001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's `Body(...)` / `Query(...)` in a default argument IS the framework's
+# documented idiom -- it is how the dependency is declared, not a mutable
+# default. Scoped to the two request-handler modules rather than repo-wide.
+"services/cloud/main.py" = ["B008"]
+"services/gateway/main.py" = ["B008"]
+
+# Tests assert on internals and deliberately construct hostile inputs.
+"tests/**" = [
+    "S101",    # assert -- that is what a test is
+    "S105", "S106",  # "hardcoded password" false positives on test key material
+    "SLF001",  # reaching into private attrs to corrupt state is the point
+    "ARG001", "ARG002", "ARG005",  # test doubles legitimately ignore arguments
+    "C408",    # dict(...) kwargs then **unpacked into the function under test
+    "ISC004",  # long parametrize strings read better explicitly concatenated
+]
+# The docker integration tests shell out to `docker compose` and poll our own
+# localhost endpoints. Both are the point of the module, and the inputs are
+# literals we wrote, not user data.
+"tests/test_docker_integration.py" = [
+    "S101", "S603", "S607",  # subprocess: fixed argv, our own compose files
+    "S310",    # urllib against http://127.0.0.1 health endpoints
+]
+"scripts/**" = [
+    "S101",    # asserts in the benchmark harness guard measurement validity
+    "T201",    # these scripts exist to print
+    "ARG001",  # phase-demo functions share one signature for dispatch
+    "C408", "ISC004",
+]
+# S310 (urllib scheme audit) fires on both Request() and urlopen(). The smoke
+# test validates the scheme itself in get_json() -- rejecting anything that is
+# not http/https before either call -- so the underlying risk is handled in
+# code rather than waved away. Scoped to this one file.
+"scripts/smoke_test.py" = ["S310"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["services"]
+
+# --------------------------------------------------------------------------
+# mypy -- type checking
+# --------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+files = ["services", "scripts", "tests"]
+ignore_missing_imports = true
+
+# Moderate strictness, verified achievable on this codebase today. Not --strict:
+# that flags `Any` returns from json() and third-party stubs we do not control,
+# which would be noise rather than signal. Revisit if the codebase grows.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+# Tests and scripts are checked, but not required to annotate every helper --
+# the value there is catching real type errors, not annotation bureaucracy.
+module = ["tests.*", "scripts.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+# --------------------------------------------------------------------------
+# bandit -- static security analysis
+# --------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", ".git"]
+# B101 (assert_used): our asserts are internal invariants, not input validation.
+# They are stripped under `python -O`, which we do not use. Every user-facing
+# check is an explicit raise. Reviewed and accepted rather than blanket-ignored
+# -- see docs/DECISIONS.md.
+skips = ["B101"]
+
+# --------------------------------------------------------------------------
+# pytest / coverage
+# --------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["services"]
+branch = true
+omit = [
+    # Entrypoints that only run inside a container from env vars. Exercised by
+    # the docker integration tests, where coverage is not collected.
+    "services/*/main.py:__main__",
+]
+
+[tool.coverage.report]
+# 85%, against 92% actual. Deliberately below current so the gate catches
+# regressions rather than blocking unrelated work, and high enough that
+# deleting tests fails the build. See docs/TESTING.md for why the headroom
+# exists (device/main.py is covered only by the docker suite, which coverage
+# cannot see).
+fail_under = 85
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

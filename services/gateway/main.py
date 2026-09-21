@@ -222,10 +222,16 @@ def create_app(
             # The reading is lost. The baseline has no store-and-forward queue,
             # which is a real availability weakness -- see docs/ARCHITECTURE.md.
             counters["forward_failed"] += 1
-            log.error("hop2 forward failed seq=%s: %s", seq, exc)
+            # log.error, not log.exception: the cause is in the message and a
+            # traceback per dropped reading would bury the log.
+            log.error("hop2 forward failed seq=%s: %s", seq, exc)  # noqa: TRY400
             return JSONResponse(
                 status_code=502,
-                content={"status": "accepted_not_forwarded", "seq": seq, "reason": "cloud_unreachable"},
+                content={
+                    "status": "accepted_not_forwarded",
+                    "seq": seq,
+                    "reason": "cloud_unreachable",
+                },
             )
 
         if result.get("status") == "accepted":
@@ -235,7 +241,9 @@ def create_app(
             counters["forward_failed"] += 1
             log.warning("cloud rejected seq=%s reason=%s", seq, result.get("reason"))
 
-        return JSONResponse(content={"status": "accepted", "seq": seq, "cloud": result.get("status")})
+        return JSONResponse(
+            content={"status": "accepted", "seq": seq, "cloud": result.get("status")}
+        )
 
     @app.get("/stats")
     def stats() -> dict[str, Any]:
@@ -284,7 +292,9 @@ if __name__ == "__main__":
 
     uvicorn.run(
         build_default_app(),
-        host="0.0.0.0",  # noqa: S104 - container-internal
+        # Container-internal bind; the gateway Service is ClusterIP-only
+        # and its ingest port is never published outside the cluster.
+        host="0.0.0.0",  # noqa: S104  # nosec B104
         port=env_int("PORT", 8000),
         log_level=env_str("LOG_LEVEL", "info").lower(),
     )

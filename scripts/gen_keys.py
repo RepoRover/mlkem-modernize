@@ -15,18 +15,19 @@ does not silently invalidate a device's pinned gateway key.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from services.common import cryptoutil as cu  # noqa: E402
+from services.common import cryptoutil as cu
 
 # name -> what it is used for
 KEYS = {
     "device_ecdh": "hop 1 device long-term ECDH key (static-static; IS the device identity)",
     "gateway_ecdh": "hop 1 gateway long-term ECDH key (static-static; pinned in the device)",
-    "gateway_ecdsa": "hop 2 gateway long-term ECDSA key (authenticates the gateway to the cloud)",
+    "gateway_ecdsa": "hop 2 gateway ECDSA key (authenticates gateway to cloud)",
     "cloud_ecdsa": "hop 2 cloud long-term ECDSA key (authenticates the cloud to the gateway)",
 }
 
@@ -48,10 +49,8 @@ def generate(out_dir: Path, force: bool) -> int:
         pub_path.write_bytes(cu.public_key_to_pem(private_key.public_key()))
 
         # Best effort on POSIX; a no-op on Windows, where the volume is the boundary.
-        try:
+        with contextlib.suppress(OSError):
             priv_path.chmod(0o600)
-        except OSError:
-            pass
 
         print(f"  write  {name:<14} {purpose}")
         written += 1

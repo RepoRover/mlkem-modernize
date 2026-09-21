@@ -9,6 +9,13 @@
 # (47.0.0 supported AWS-LC/BoringSSL only). The 50.0.1 binary wheels ship
 # OpenSSL 4.0.2.
 cryptography==50.0.1
-fastapi>=0.110,<0.120
-uvicorn[standard]>=0.29,<0.36
-httpx>=0.27,<0.29
+
+# Web stack. Floors are set by pip-audit findings, not by taste:
+# fastapi < 0.121 resolves starlette 0.48.x, which carries 12 known CVEs
+# (PYSEC-2026-161/248/249/1942/2280/2281). starlette >= 1.3.1 is the fix, so
+# the fastapi floor is whatever first admits it. CI re-checks this on every run
+# and on a weekly schedule -- see .github/workflows/ci.yml.
+fastapi>=0.141,<0.142
+starlette>=1.3.1          # pinned directly so a transitive downgrade is caught
+uvicorn[standard]>=0.53,<0.54
+httpx>=0.28,<0.29

@@ -28,8 +28,8 @@ class GatewayClient:
         self,
         base_url: str,
         device_id: str,
-        device_static_key: "cu.ec.EllipticCurvePrivateKey",
-        gateway_public_key: "cu.ec.EllipticCurvePublicKey",
+        device_static_key: cu.ec.EllipticCurvePrivateKey,
+        gateway_public_key: cu.ec.EllipticCurvePublicKey,
         log: logging.Logger,
         timeout: float = 10.0,
         http_client: httpx.Client | None = None,
@@ -121,7 +121,10 @@ class GatewayClient:
         return result
 
     def _send_once(self, payload: dict[str, Any]) -> dict[str, Any]:
-        assert self._sender is not None and self._session_id is not None
+        if self._sender is None or self._session_id is None:
+            # Not an assert: asserts are stripped under `python -O`, and this
+            # invariant is what stops us encrypting with a half-built session.
+            raise HandshakeError("no established session; call handshake() first")
         plaintext = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         seq, nonce, ciphertext = self._sender.encrypt(plaintext)
         self._sent += 1

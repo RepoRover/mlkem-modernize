@@ -53,8 +53,8 @@ class CloudClient:
         self,
         base_url: str,
         gateway_id: str,
-        signing_key: "cu.ec.EllipticCurvePrivateKey",
-        cloud_public_key: "cu.ec.EllipticCurvePublicKey",
+        signing_key: cu.ec.EllipticCurvePrivateKey,
+        cloud_public_key: cu.ec.EllipticCurvePublicKey,
         log: logging.Logger,
         timeout: float = 10.0,
         http_client: httpx.Client | None = None,
@@ -220,7 +220,8 @@ class CloudClient:
         ss_mlkem = b""
         try:
             if selected == SUITE_HYBRID:
-                assert x25519_priv is not None and mlkem_priv is not None
+                if x25519_priv is None or mlkem_priv is None:
+                    raise HandshakeError("hybrid selected but no hybrid key share was built")
                 ss_classical = cu.x25519_exchange(
                     x25519_priv, cu.x25519_public_from_bytes(server_share.x25519_pub)
                 )
@@ -229,7 +230,8 @@ class CloudClient:
                 # surfaces as an AEAD tag failure on our first message.
                 ss_mlkem = cu.mlkem768_decapsulate(mlkem_priv, mlkem_ct)
             else:
-                assert p256_priv is not None
+                if p256_priv is None:
+                    raise HandshakeError("classical selected but no P-256 share was built")
                 ss_classical = cu.ecdh(
                     p256_priv, cu.public_key_from_bytes(server_share.p256_pub)
                 )
@@ -291,7 +293,8 @@ class CloudClient:
         return result
 
     def _send_once(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        assert self._sender is not None and self._session_id is not None
+        if self._sender is None or self._session_id is None:
+            raise HandshakeError("no established session; call handshake() first")
         plaintext = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
         seq, nonce, ciphertext = self._sender.encrypt(plaintext)
         self._sent += 1

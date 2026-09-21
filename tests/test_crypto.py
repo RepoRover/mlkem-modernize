@@ -10,7 +10,6 @@ from services.common import cryptoutil as cu
 from services.common.handshake import hop1_derive, hop2_derive
 from services.common.wire import b64d, b64e, counter_bytes, lp
 
-
 # ------------------------------------------------------------------ encoding
 
 
@@ -23,7 +22,9 @@ def test_length_prefixing_is_unambiguous():
 def test_base64_roundtrip_and_strictness():
     raw = cu.random_bytes(32)
     assert b64d(b64e(raw)) == raw
-    with pytest.raises(Exception):
+    # b64d normalises every decode failure to ValueError so request handlers
+    # can catch one type; see services/common/wire.py.
+    with pytest.raises(ValueError, match=r"base64|Invalid"):
         b64d("not valid base64!!")
 
 
@@ -221,7 +222,7 @@ def test_sequence_number_is_bound_into_the_aad():
     AAD doing the work: the tag covers the sequence number.
     """
     sender, receiver = _pair()
-    _, nonce, ct = sender.encrypt(b"payload")
+    _seq, nonce, ct = sender.encrypt(b"payload")
     prefix = nonce[:4]
 
     with pytest.raises(InvalidTag):
@@ -232,7 +233,7 @@ def test_nonce_that_does_not_match_the_counter_is_rejected():
     """The nonce is fully determined by session and counter, so a mismatch is
     protocol abuse and is caught before any decryption is attempted."""
     sender, receiver = _pair()
-    seq, nonce, ct = sender.encrypt(b"payload")
+    seq, _nonce, ct = sender.encrypt(b"payload")
 
     with pytest.raises(cu.ReplayRejected, match="nonce does not match"):
         receiver.decrypt(seq, b"\x00" * 12, ct)

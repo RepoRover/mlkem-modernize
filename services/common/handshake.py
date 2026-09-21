@@ -108,8 +108,8 @@ class DirectionalSession:
 
 
 def hop1_derive(
-    own_static_private: "cu.ec.EllipticCurvePrivateKey",
-    peer_static_public: "cu.ec.EllipticCurvePublicKey",
+    own_static_private: cu.ec.EllipticCurvePrivateKey,
+    peer_static_public: cu.ec.EllipticCurvePublicKey,
     client_nonce: bytes,
     server_nonce: bytes,
     session_id: bytes,
@@ -183,8 +183,8 @@ def hop2_server_transcript(
 
 
 def hop2_derive(
-    own_ephemeral_private: "cu.ec.EllipticCurvePrivateKey",
-    peer_ephemeral_public: "cu.ec.EllipticCurvePublicKey",
+    own_ephemeral_private: cu.ec.EllipticCurvePrivateKey,
+    peer_ephemeral_public: cu.ec.EllipticCurvePublicKey,
     client_nonce: bytes,
     server_nonce: bytes,
     client_eph_pub: bytes,
@@ -254,8 +254,8 @@ def _share_fields(share: KeyShare) -> tuple[bytes, bytes, bytes]:
 def hop2_v2_client_transcript(
     client_id: str,
     client_nonce: bytes,
-    offered_suites: "tuple[str, ...] | list[str]",
-    shares: "dict[str, KeyShare]",
+    offered_suites: tuple[str, ...] | list[str],
+    shares: dict[str, KeyShare],
 ) -> bytes:
     """Bytes the gateway signs in its v2 ClientHello.
 
@@ -283,8 +283,8 @@ def hop2_v2_client_transcript(
 def hop2_v2_server_transcript(
     client_id: str,
     client_nonce: bytes,
-    offered_suites: "tuple[str, ...] | list[str]",
-    client_shares: "dict[str, KeyShare]",
+    offered_suites: tuple[str, ...] | list[str],
+    client_shares: dict[str, KeyShare],
     selected_suite: str,
     session_id: bytes,
     server_nonce: bytes,
@@ -334,7 +334,7 @@ def hop2_v2_server_transcript(
 def _hop2_v2_info_base(
     selected_suite: str,
     client_id: str,
-    offered_suites: "tuple[str, ...] | list[str]",
+    offered_suites: tuple[str, ...] | list[str],
     client_nonce: bytes,
     server_nonce: bytes,
     client_share: KeyShare,
@@ -367,7 +367,7 @@ def hop2_v2_derive(
     ss_mlkem768: bytes,
     ss_classical: bytes,
     client_id: str,
-    offered_suites: "tuple[str, ...] | list[str]",
+    offered_suites: tuple[str, ...] | list[str],
     client_nonce: bytes,
     server_nonce: bytes,
     client_share: KeyShare,

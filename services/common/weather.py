@@ -17,11 +17,12 @@ read as UTF-8 rather than whatever the platform default happens to be.
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from datetime import date as date_type
 from io import StringIO
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 # Plausibility bounds for terrestrial daily weather. These are sanity checks,
 # not science: the aim is to reject garbage and obvious tampering, not to
@@ -133,7 +134,7 @@ def _parse_station(block: list[list[str]]) -> Station:
     values = block[1]
     if len(values) < len(header):
         raise WeatherDataError("station value row has fewer fields than its header")
-    row = dict(zip(header, values))
+    row = dict(zip(header, values, strict=False))
     try:
         return Station(
             lat=float(row["latitude"]),
@@ -190,8 +191,7 @@ def _parse_records(block: list[list[str]]) -> list[Reading]:
 def iter_readings(readings: list[Reading], loop: bool) -> Iterator[Reading]:
     """Yield readings once, or forever if `loop` is set."""
     while True:
-        for reading in readings:
-            yield reading
+        yield from readings
         if not loop:
             return
 

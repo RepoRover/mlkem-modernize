@@ -101,8 +101,13 @@ class Storage:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
 
+        # S608 is a false positive here: `where` is assembled only from the
+        # hardcoded fragments above ("date >= ?", "device_id = ?"). Every
+        # caller-supplied value is bound through a `?` placeholder in `params`,
+        # so no untrusted input ever reaches the SQL text.
         rows = self._conn.execute(
-            f"SELECT * FROM readings {where} ORDER BY date DESC LIMIT ?", params
+            f"SELECT * FROM readings {where} ORDER BY date DESC LIMIT ?",  # noqa: S608  # nosec B608
+            params,
         ).fetchall()
         return [dict(row) for row in rows]
 

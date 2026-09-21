@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud
+  namespace: weather
+  labels: { app: cloud }
+spec:
+  replicas: 1   # SQLite is single-writer and sessions are in-memory (W14/W15)
+  selector:
+    matchLabels: { app: cloud }
+  template:
+    metadata:
+      labels: { app: cloud }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: cloud
+          image: IMAGE_PLACEHOLDER   # substituted by CI with the digest-pinned tag
+          imagePullPolicy: IfNotPresent
+          # One image serves all three roles; SERVICE selects which module runs.
+          env:
+            - name: SERVICE
+              value: "cloud"
+            - name: PORT
+              value: "8000"
+            - name: DB_PATH
+              value: "/var/lib/weather/readings.db"
+            - name: PQC_POLICY
+              valueFrom:
+                configMapKeyRef: { name: wx-config, key: CLOUD_PQC_POLICY }
+          envFrom:
+            - configMapRef: { name: wx-config }
+          ports:
+            - containerPort: 8000
+              name: http
+          volumeMounts:
+            - name: keys
+              mountPath: /keys
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /var/lib/weather
+          # Liveness: restart a wedged process. Readiness: keep it out of the
+          # Service until it can actually answer, so the gateway never sees a
+          # half-started cloud.
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: keys
+          secret:
+            secretName: wx-keys
+            defaultMode: 0440  # root:fsGroup read; the app runs as gid 1000
+        - name: data
+          emptyDir: {}   # test environment: storage is intentionally ephemeral
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloud
+  namespace: weather
+spec:
+  selector: { app: cloud }
+  ports:
+    - port: 8000
+      targetPort: http
+      name: http

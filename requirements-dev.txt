@@ -1,3 +1,17 @@
 -r requirements.txt
+
+# Test runner and coverage gate.
 pytest>=8.0,<9.0
 pytest-cov>=5.0,<8.0
+
+# Quality gates. Versions are floored, not pinned exactly: a newer ruff or mypy
+# finding a new real problem is a good outcome, unlike a newer crypto library
+# silently changing primitive behaviour. If a tool upgrade breaks the build, the
+# fix is to address the finding or record a justified ignore in pyproject.toml.
+ruff>=0.16,<0.17          # lint + import order + flake8-bandit subset
+mypy>=2.3,<3.0            # type checking
+bandit[toml]>=1.9,<2.0    # static security analysis ([toml] reads pyproject)
+pip-audit>=2.10,<3.0      # dependency CVE scanning
+
+# Used by scripts/validate and the manifest checks.
+pyyaml>=6.0,<7.0

@@ -22,7 +22,6 @@ from services.common.config import (
     setup_logging,
 )
 
-
 # ------------------------------------------------------------------- env_str
 
 

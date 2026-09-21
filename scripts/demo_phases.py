@@ -31,7 +31,7 @@ from services.common import cryptoutil as cu  # noqa: E402
 from services.common.handshake import HandshakeError  # noqa: E402
 from services.common.suites import Policy  # noqa: E402
 from services.common.wire import PROTOCOL, b64e  # noqa: E402
-from services.gateway.cloud_client import CloudClient, DowngradeRejected  # noqa: E402
+from services.gateway.cloud_client import CloudClient  # noqa: E402
 
 GATEWAY_ID = "gw-01"
 
@@ -51,7 +51,9 @@ def envelope(date: str = "2024-01-01") -> dict:
     }
 
 
-def build(keys_dir: Path, cloud_policy: Policy, gateway_policy: Policy):
+def build(
+    keys_dir: Path, cloud_policy: Policy, gateway_policy: Policy
+) -> tuple[TestClient, CloudClient]:
     cloud_app = create_cloud_app(
         keys_dir=str(keys_dir), db_path=":memory:", policy=cloud_policy
     )
@@ -193,19 +195,20 @@ def phase_downgrade_attack(keys_dir: Path) -> None:
         "sig": b64e(cu.sign(signing, hop2_v2_client_transcript(
             GATEWAY_ID, nonce, offered, shares))),
     }
-    show("honest offer", ", ".join(offered))
+    show("honest offer", ", ".join(list(offered)))
 
     # The attack: remove the hybrid suite, leave the signature alone.
     attacked = dict(hello)
     attacked["offered_suites"] = [SUITE_CLASSICAL]
-    attacked["key_shares"] = {SUITE_CLASSICAL: hello["key_shares"][SUITE_CLASSICAL]}
+    classical_share = hello["key_shares"][SUITE_CLASSICAL]  # type: ignore[index]
+    attacked["key_shares"] = {SUITE_CLASSICAL: classical_share}
     show("attacker rewrites it to", SUITE_CLASSICAL)
 
     response = cloud_http.post("/handshake", json=attacked)
     show("cloud responds",
          f"HTTP {response.status_code} {response.json().get('detail')}",
          good=response.status_code == 403)
-    print(f"\n  The gateway signs its whole offer, so editing it breaks the signature.")
+    print("\n  The gateway signs its whole offer, so editing it breaks the signature.")
     print(f"  {YELLOW}Caveat: that signature is ECDSA, which is itself quantum-broken.")
     print(f"  After a CRQC exists this defence fails and only policy=require holds.{RESET}")
     cloud_http.close()
@@ -221,7 +224,7 @@ def phase_3(keys_dir: Path) -> None:
     show("hop 2 (gateway -> cloud)", f"{client.suite}  POST-QUANTUM", good=True)
     show("hop 1 (device -> gateway)", "ECDH-P256-static-static  CLASSICAL", good=False)
     print(f"\n  {RED}An attacker recording hop 1 today can decrypt it with a future")
-    print(f"  quantum computer, whatever hop 2 does. The system as a whole is NOT")
+    print("  quantum computer, whatever hop 2 does. The system as a whole is NOT")
     print(f"  post-quantum until phase 4 replaces the device fleet.{RESET}")
     print(f"\n  {YELLOW}Sunset criteria for classical on hop 1: see docs/MIGRATION.md.{RESET}")
     client.close()

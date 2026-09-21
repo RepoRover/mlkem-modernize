@@ -118,7 +118,8 @@ def create_app(
         the same policy gate as an explicit classical offer.
         """
         try:
-            selected = negotiate([SUITE_CLASSICAL], policy)
+            # Called for its side-effect: raises unless policy permits classical.
+            negotiate([SUITE_CLASSICAL], policy)
         except NegotiationError as exc:
             counters["handshakes_downgrade_refused"] += 1
             log.warning(
@@ -127,7 +128,6 @@ def create_app(
             )
             raise HTTPException(403, exc.reason) from exc
 
-        assert selected == SUITE_CLASSICAL
         counters["handshakes_legacy_v1"] += 1
         counters["handshakes_classical"] += 1
         log.warning(
@@ -578,7 +578,10 @@ if __name__ == "__main__":
 
     uvicorn.run(
         build_default_app(),
-        host="0.0.0.0",  # noqa: S104 - container-internal, published selectively by compose
+        # Binding all interfaces is correct inside a container: what is
+        # reachable is decided by the port mapping / k8s Service, not
+        # by the bind address. Only the cloud read API is published.
+        host="0.0.0.0",  # noqa: S104  # nosec B104
         port=env_int("PORT", 8000),
         log_level=env_str("LOG_LEVEL", "info").lower(),
     )

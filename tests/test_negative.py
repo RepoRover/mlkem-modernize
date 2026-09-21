@@ -656,6 +656,7 @@ def test_malformed_source_file_raises_a_clean_error(text):
 
 
 def test_validate_reading_rejects_non_mapping_input():
+    bad: object
     for bad in ([], "string", 42, None):
         with pytest.raises((ValidationError, TypeError)):
             validate_reading(bad)  # type: ignore[arg-type]

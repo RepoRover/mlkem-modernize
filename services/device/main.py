@@ -15,8 +15,6 @@ import httpx
 
 from ..common import cryptoutil as cu
 from ..common.config import (
-    DEFAULT_MAX_RECORDS_PER_SESSION,
-    DEFAULT_SESSION_TTL_SECONDS,
     env_bool,
     env_float,
     env_int,
@@ -103,7 +101,9 @@ def main() -> int:
                 # Legacy behaviour: log, drop the reading, keep going. No queue,
                 # no retry budget, no backoff. Known availability weakness.
                 failed += 1
-                log.error("send failed date=%s: %s", reading.date, exc)
+                # log.error, not log.exception: a traceback for every dropped
+                # reading would bury the log. The message names the cause.
+                log.error("send failed date=%s: %s", reading.date, exc)  # noqa: TRY400
 
             if max_records and sent >= max_records:
                 log.info("reached MAX_RECORDS=%d, stopping", max_records)

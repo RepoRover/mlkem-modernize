@@ -43,7 +43,7 @@ class Policy(str, Enum):
     CLASSICAL_ONLY = "classical-only"
 
     @classmethod
-    def parse(cls, raw: str) -> "Policy":
+    def parse(cls, raw: str) -> Policy:
         value = (raw or "").strip().lower()
         try:
             return cls(value)
@@ -77,7 +77,7 @@ class NoCommonSuite(NegotiationError):
     reason = "no_common_suite"
 
 
-def canonical_suites(suites: "list[str] | tuple[str, ...]") -> str:
+def canonical_suites(suites: list[str] | tuple[str, ...]) -> str:
     """Stable string form of an offer list, for signing and for the KDF.
 
     Order is preserved because it expresses preference, and because an attacker
@@ -87,7 +87,7 @@ def canonical_suites(suites: "list[str] | tuple[str, ...]") -> str:
     return ",".join(suites)
 
 
-def negotiate(offered: "list[str] | tuple[str, ...]", policy: Policy) -> str:
+def negotiate(offered: list[str] | tuple[str, ...], policy: Policy) -> str:
     """Pick a suite, or refuse.
 
     `offered` is untrusted input from the peer. Unknown suite names are ignored
