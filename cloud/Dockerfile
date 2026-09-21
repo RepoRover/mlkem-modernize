@@ -7,12 +7,13 @@ COPY pyproject.toml uv.lock ./
 COPY device/pyproject.toml device/pyproject.toml
 COPY gateway/pyproject.toml gateway/pyproject.toml
 COPY cloud/pyproject.toml cloud/pyproject.toml
-RUN uv sync --frozen --package cloud --no-dev --no-install-workspace
+RUN uv sync --locked --package cloud --no-dev --no-install-workspace
 
 COPY cloud/src cloud/src
+RUN uv sync --locked --package cloud --no-dev --no-editable
+
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/cloud/src" \
     PYTHONUNBUFFERED=1
 USER 10001:10001
 EXPOSE 8443
-CMD ["python", "-m", "cloud.main"]
+CMD ["mlkem-cloud"]

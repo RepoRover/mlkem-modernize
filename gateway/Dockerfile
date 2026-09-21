@@ -7,13 +7,13 @@ COPY pyproject.toml uv.lock ./
 COPY device/pyproject.toml device/pyproject.toml
 COPY gateway/pyproject.toml gateway/pyproject.toml
 COPY cloud/pyproject.toml cloud/pyproject.toml
-RUN uv sync --frozen --package gateway --no-dev --no-install-workspace
+RUN uv sync --locked --package gateway --no-dev --no-install-workspace
 
 COPY gateway/src gateway/src
+RUN uv sync --locked --package gateway --no-dev --no-editable
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/gateway/src" \
     PYTHONUNBUFFERED=1
 USER 10001:10001
 EXPOSE 8443
-CMD ["python", "-m", "gateway.main"]
+CMD ["mlkem-gateway"]

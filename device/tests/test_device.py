@@ -3,13 +3,13 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from crypto import device_aad, encrypt_observation
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from dataset import load_dataset, observations_for_cycle
-from delivery import DeliveryAction, classify_response, retry_delay
-from errors import DeviceError
-from models import Location, Observation
+from device.crypto import device_aad, encrypt_observation
+from device.dataset import load_dataset, observations_for_cycle
+from device.delivery import DeliveryAction, classify_response, retry_delay
+from device.errors import DeviceError
+from device.models import Location, Observation
 from pydantic import ValidationError
 
 

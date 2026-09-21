@@ -5,11 +5,12 @@ import logging
 import ssl
 
 import httpx
-from config import Settings
-from dataset import load_dataset, observations_for_cycle
-from delivery import deliver
-from errors import DeviceError, validation_codes
 from pydantic import ValidationError
+
+from device.config import Settings
+from device.dataset import load_dataset, observations_for_cycle
+from device.delivery import deliver
+from device.errors import DeviceError, validation_codes
 
 logger = logging.getLogger("device")
 

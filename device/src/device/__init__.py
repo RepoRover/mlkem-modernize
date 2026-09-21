@@ -1,0 +1,1 @@
+"""Legacy weather Device simulator."""

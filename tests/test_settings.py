@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from cloud.config import Settings as CloudSettings
-from config import Settings as DeviceSettings
+from device.config import Settings as DeviceSettings
 from gateway.config import Settings as GatewaySettings
 from pydantic import ValidationError
 

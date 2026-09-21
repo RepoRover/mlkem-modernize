@@ -5,9 +5,10 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
-from errors import DeviceError, validation_codes
-from models import Location, Observation, SourceObservation
 from pydantic import ValidationError
+
+from device.errors import DeviceError, validation_codes
+from device.models import Location, Observation, SourceObservation
 
 logger = logging.getLogger("device")
 METADATA_HEADER = [

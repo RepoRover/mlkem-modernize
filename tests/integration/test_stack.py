@@ -14,10 +14,10 @@ import pytest
 from cloud.database import PostgresStore
 from cloud.errors import DatabaseError
 from cloud.models import Observation as CloudObservation
-from crypto import encrypt_observation
+from device.crypto import encrypt_observation
+from device.models import Observation as DeviceObservation
 from gateway.crypto import encrypt_cloud_envelope
 from gateway.models import Observation
-from models import Observation as DeviceObservation
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_INTEGRATION") != "1",

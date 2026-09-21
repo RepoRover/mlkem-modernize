@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 from typing import Self
 
-from models import IDENTIFIER
 from pydantic import AnyHttpUrl, Field, FilePath, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from device.models import IDENTIFIER
 
 
 class Settings(BaseSettings):

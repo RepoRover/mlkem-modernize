@@ -6,13 +6,15 @@ from pathlib import Path
 
 import httpx
 import pytest
-from config import Settings as DeviceSettings
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from delivery import deliver
-from errors import DeviceError
+from device.config import Settings as DeviceSettings
+from device.delivery import deliver
+from device.errors import DeviceError
+from device.models import Location
+from device.models import Observation as DeviceObservation
 from gateway.app import GatewayService, create_app
 from gateway.crypto import cloud_aad, cloud_hkdf_info
 from gateway.forwarding import (
@@ -22,8 +24,6 @@ from gateway.forwarding import (
 )
 from gateway.models import CloudEnvelope
 from gateway.models import Observation as GatewayObservation
-from models import Location
-from models import Observation as DeviceObservation
 
 DEVICE_ID = "weather-station-001"
 DEVICE_KEY_ID = "device-key-001"
@@ -178,7 +178,7 @@ def test_legacy_device_to_gateway_to_cloud_integration(tmp_path: Path) -> None:
 
 def test_gateway_rejects_tampering_before_cloud(tmp_path: Path) -> None:
     async def scenario() -> None:
-        from crypto import encrypt_observation
+        from device.crypto import encrypt_observation
 
         device_key = bytes(range(32))
         private_key = MLKEM768PrivateKey.generate()

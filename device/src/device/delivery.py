@@ -9,10 +9,11 @@ import ssl
 from enum import StrEnum
 
 import httpx
-from config import Settings
-from crypto import encrypt_observation
-from errors import DeviceError
-from models import Observation
+
+from device.config import Settings
+from device.crypto import encrypt_observation
+from device.errors import DeviceError
+from device.models import Observation
 
 logger = logging.getLogger("device")
 MAX_GATEWAY_RESPONSE_BYTES = 32 * 1024

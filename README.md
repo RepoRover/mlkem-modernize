@@ -105,12 +105,13 @@ has wider test-only secret access to exercise rotation.
 - Bearer credentials are ASCII token syntax, compared timing-safely. Validation logs
   contain bounded error codes, not attacker-controlled field names or values.
 
-Service commands are `python device/src/main.py`, `python -m gateway.main`, and
-`python -m cloud.main` with the respective source directories on `PYTHONPATH`.
-`gateway/src/main.py` and `cloud/src/main.py` are intentionally retained compatibility
-launchers for direct source-tree execution. `create_app()` is the explicit ASGI
-factory; the supported main commands configure TLS and connection limits. Gateway's
-`cloud_aad()` helper intentionally supports independent protocol-verification tests.
+The installed service commands are `mlkem-device`, `mlkem-gateway`, and
+`mlkem-cloud`; the equivalent module entry points are `python -m device.main`,
+`python -m gateway.main`, and `python -m cloud.main`. Each workspace member is an
+independently buildable package, so service execution does not depend on `PYTHONPATH`
+or the current directory. `create_app()` is the explicit ASGI factory; the supported
+main commands configure TLS and connection limits. Gateway's `cloud_aad()` helper
+intentionally supports independent protocol-verification tests.
 
 ## Manual ML-KEM rotation
 

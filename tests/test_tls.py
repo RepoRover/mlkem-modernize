@@ -8,18 +8,18 @@ from typing import Literal
 
 import httpx
 import pytest
-from config import Settings as DeviceSettings
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from delivery import deliver
-from errors import DeviceError
+from device.config import Settings as DeviceSettings
+from device.delivery import deliver
+from device.errors import DeviceError
+from device.models import Observation as DeviceObservation
 from gateway.errors import PermanentCloudError
 from gateway.forwarding import CloudForwarder
 from gateway.models import Observation
-from models import Observation as DeviceObservation
 
 from tools.bootstrap import generate, private_bytes
 

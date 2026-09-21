@@ -11,7 +11,10 @@ venv = ".venv"
 extraPaths = ["device/src", "gateway/src", "cloud/src"]
 
 [tool.pytest.ini_options]
-pythonpath = [".", "device/src", "gateway/src", "cloud/src"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false
 
 [tool.uv.workspace]
 members = [

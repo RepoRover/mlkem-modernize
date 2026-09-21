@@ -158,7 +158,7 @@ wheels = [
 [[package]]
 name = "cloud"
 version = "0.1.0"
-source = { virtual = "cloud" }
+source = { editable = "cloud" }
 dependencies = [
     { name = "asyncpg" },
     { name = "cryptography" },
@@ -242,7 +242,7 @@ wheels = [
 [[package]]
 name = "device"
 version = "0.1.0"
-source = { virtual = "device" }
+source = { editable = "device" }
 dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
@@ -279,7 +279,7 @@ wheels = [
 [[package]]
 name = "gateway"
 version = "0.1.0"
-source = { virtual = "gateway" }
+source = { editable = "gateway" }
 dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },

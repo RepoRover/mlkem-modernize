@@ -4,8 +4,9 @@ import base64
 import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from errors import DeviceError
-from models import DeviceEnvelope, Observation
+
+from device.errors import DeviceError
+from device.models import DeviceEnvelope, Observation
 
 
 def device_aad(

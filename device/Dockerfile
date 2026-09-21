@@ -7,12 +7,13 @@ COPY pyproject.toml uv.lock ./
 COPY device/pyproject.toml device/pyproject.toml
 COPY gateway/pyproject.toml gateway/pyproject.toml
 COPY cloud/pyproject.toml cloud/pyproject.toml
-RUN uv sync --frozen --package device --no-dev --no-install-workspace
+RUN uv sync --locked --package device --no-dev --no-install-workspace
 
 COPY device/src device/src
 COPY device/data device/data
+RUN uv sync --locked --package device --no-dev --no-editable
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 USER 10001:10001
-CMD ["python", "device/src/main.py"]
+CMD ["mlkem-device"]

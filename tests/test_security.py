@@ -218,10 +218,10 @@ def test_gateway_bounds_success_and_error_response_streams(status: int) -> None:
 
 
 def test_device_bounds_response_stream(tmp_path: Path) -> None:
-    from config import Settings as DeviceSettings
-    from delivery import deliver
-    from errors import DeviceError
-    from models import Observation as DeviceObservation
+    from device.config import Settings as DeviceSettings
+    from device.delivery import deliver
+    from device.errors import DeviceError
+    from device.models import Observation as DeviceObservation
 
     from tools.bootstrap import generate
 
@@ -364,7 +364,7 @@ def test_invalid_token_configuration_rejected(tmp_path: Path) -> None:
 
 
 def test_device_safe_validation_codes():
-    from errors import validation_codes
+    from device.errors import validation_codes
 
     try:
         observation().__class__.model_validate({"SECRET\nFORGED": "value"})
