@@ -31,18 +31,22 @@ x-healthcheck-python: &healthcheck-python
   start_period: 3s
 
 services:
-  # Bootstrap trust locally, before either network endpoint starts. The cloud
-  # private seed and gateway public-key pin live in separate volumes; both are
-  # mounted read-only into the long-running services below.
+  # Bootstrap mutual trust locally before either network endpoint starts. Each
+  # ML-DSA private seed and peer public pin has a separate volume, mounted
+  # read-only only into the long-running service that needs it.
   identity-provisioner:
     <<: *node
     command: ["python", "-m", "services.identity_provisioner"]
     environment:
-      CLOUD_IDENTITY_PATH: /run/identity-private/cloud_mldsa.key
-      CLOUD_IDENTITY_PUBLIC_KEY_PATH: /run/identity-public/cloud_mldsa.pub
+      CLOUD_IDENTITY_PATH: /run/cloud-identity-private/cloud_mldsa.key
+      CLOUD_IDENTITY_PUBLIC_KEY_PATH: /run/cloud-identity-public/cloud_mldsa.pub
+      GATEWAY_IDENTITY_PATH: /run/gateway-identity-private/gateway_mldsa.key
+      GATEWAY_IDENTITY_PUBLIC_KEY_PATH: /run/gateway-identity-public/gateway_mldsa.pub
     volumes:
-      - cloud-identity-private:/run/identity-private
-      - cloud-identity-public:/run/identity-public
+      - cloud-identity-private:/run/cloud-identity-private
+      - cloud-identity-public:/run/cloud-identity-public
+      - gateway-identity-private:/run/gateway-identity-private
+      - gateway-identity-public:/run/gateway-identity-public
     network_mode: none
 
   cloud:
@@ -53,14 +57,17 @@ services:
       PORT: "8000"
       CLOUD_DB_PATH: /var/lib/node/readings.db
       CLOUD_KEY_PATH: /var/lib/node/cloud_rsa.pem
-      CLOUD_IDENTITY_PATH: /run/identity-private/cloud_mldsa.key
+      CLOUD_IDENTITY_PATH: /run/cloud-identity-private/cloud_mldsa.key
+      GATEWAY_IDENTITY_PUBLIC_KEY_PATH: /run/gateway-identity-public/gateway_mldsa.pub
+      MAX_PENDING_OFFERS: "128"
       # Migration complete: quantum-vulnerable traffic is no longer accepted.
       ALLOW_LEGACY_SUITE: "false"
     volumes:
       - cloud-state:/var/lib/node
-      - cloud-identity-private:/run/identity-private:ro
+      - cloud-identity-private:/run/cloud-identity-private:ro
+      - gateway-identity-public:/run/gateway-identity-public:ro
     networks: [backbone]
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
     depends_on:
       identity-provisioner: {condition: service_completed_successfully}
     healthcheck:
@@ -95,20 +102,27 @@ services:
       # link is observed exactly as the device-to-gateway link is.
       CLOUD_URL: http://tap-backbone:9000
       GATEWAY_KEY_PATH: /var/lib/node/gateway_rsa.pem
+      # Hybrid is mandatory here; rollback uses the separate baseline file.
       UPSTREAM_SUITE: hybrid
-      CLOUD_IDENTITY_PUBLIC_KEY_PATH: /run/identity-public/cloud_mldsa.pub
+      CLOUD_IDENTITY_PUBLIC_KEY_PATH: /run/cloud-identity-public/cloud_mldsa.pub
+      GATEWAY_IDENTITY_PATH: /run/gateway-identity-private/gateway_mldsa.key
+      UPSTREAM_RETRY_ATTEMPTS: "3"
+      UPSTREAM_TIMEOUT_SECONDS: "5"
+      UPSTREAM_TOTAL_DEADLINE_SECONDS: "12"
+      UPSTREAM_MAX_RESPONSE_BYTES: "32768"
     volumes:
       - gateway-state:/var/lib/node
-      - cloud-identity-public:/run/identity-public:ro
+      - cloud-identity-public:/run/cloud-identity-public:ro
+      - gateway-identity-private:/run/gateway-identity-private:ro
     # The gateway straddles both segments. That position is what lets it
     # terminate the device's legacy session and open a separate session onward.
     networks: [edge, backbone]
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]
     depends_on:
       tap-backbone: {condition: service_healthy}
     healthcheck:
       <<: *healthcheck-python
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/readyz')"]
 
   tap-edge:
     <<: *node
@@ -195,5 +209,7 @@ volumes:
   cloud-state:
   cloud-identity-private:
   cloud-identity-public:
+  gateway-identity-private:
+  gateway-identity-public:
   gateway-state:
   capture:

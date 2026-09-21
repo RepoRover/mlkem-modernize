@@ -24,6 +24,8 @@ NONCE_LENGTH = 12
 MAX_SEQ = 2**32 - 1
 
 _AAD_CONTEXT = b"mlkem-modernize/aad/v1"
+_SESSION_ID_LENGTH = 16
+_SESSION_ID_ALPHABET = frozenset("0123456789abcdef")
 
 
 class FrameError(ValueError):
@@ -87,6 +89,22 @@ def _require(mapping: Mapping[str, Any], key: str, kind: type) -> Any:
     return value
 
 
+def _require_session_id(mapping: Mapping[str, Any]) -> str:
+    session_id = str(_require(mapping, "session_id", str))
+    if len(session_id) != _SESSION_ID_LENGTH or any(
+        character not in _SESSION_ID_ALPHABET for character in session_id
+    ):
+        raise FrameError("session_id must be exactly 16 lowercase hexadecimal characters")
+    return session_id
+
+
+def _require_version(mapping: Mapping[str, Any]) -> int:
+    version = int(_require(mapping, "v", int))
+    if version != PROTOCOL_VERSION:
+        raise FrameError(f"unsupported protocol version {version}; expected {PROTOCOL_VERSION}")
+    return version
+
+
 @dataclass(frozen=True)
 class HandshakeRequest:
     """Carries the initiator's key-encapsulation output to the responder.
@@ -111,14 +129,16 @@ class HandshakeRequest:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> HandshakeRequest:
+        version = _require_version(raw)
+        session_id = _require_session_id(raw)
         kem = _require(raw, "kem", dict)
         for key, value in kem.items():
             if not isinstance(key, str) or not isinstance(value, str):
                 raise FrameError("kem payload must map strings to base64 strings")
         return cls(
-            version=_require(raw, "v", int),
+            version=version,
             suite=_require(raw, "suite", str),
-            session_id=_require(raw, "session_id", str),
+            session_id=session_id,
             kem_payload=dict(kem),
         )
 
@@ -150,13 +170,15 @@ class DataFrame:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> DataFrame:
+        version = _require_version(raw)
+        session_id = _require_session_id(raw)
         seq = _require(raw, "seq", int)
         if not 0 <= seq <= MAX_SEQ:
             raise FrameError(f"sequence number {seq} outside the safe nonce range")
         return cls(
-            version=_require(raw, "v", int),
+            version=version,
             suite=_require(raw, "suite", str),
-            session_id=_require(raw, "session_id", str),
+            session_id=session_id,
             seq=seq,
             ciphertext=b64d(_require(raw, "ct", str)),
         )

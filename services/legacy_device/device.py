@@ -26,6 +26,10 @@ SERVICE = "legacy-device"
 log = pqcnode.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
 
 
+class SessionNeedsRehandshake(RuntimeError):
+    """Raised when the current legacy session can no longer carry a reading."""
+
+
 class DeviceConfig:
     def __init__(self) -> None:
         self.gateway_url = env_str("GATEWAY_URL", "http://gateway:8080").rstrip("/")
@@ -106,13 +110,7 @@ def run(config: DeviceConfig | None = None) -> int:
     )
 
     pem = _wait_for_gateway(config)
-    client = cs.LegacyClient(cs.load_public_key(pem))
-    request, session = client.open_session()
-    _post_json(f"{config.gateway_url}/legacy/session", request.to_dict(), config.timeout)
-    log.info(
-        "session established with gateway",
-        extra={"session_id": request.session_id, "suite": request.suite},
-    )
+    session = _establish_session(config, pem)
 
     sent = 0
     limit = config.max_readings or None
@@ -121,7 +119,7 @@ def run(config: DeviceConfig | None = None) -> int:
             if limit is not None and sent >= limit:
                 log.info("reading limit reached", extra={"sent": sent})
                 return sent
-            _send(config, session, reading)
+            session = _send_with_rehandshake(config, pem, session, reading)
             sent += 1
             if config.interval > 0:
                 time.sleep(config.interval)
@@ -130,11 +128,45 @@ def run(config: DeviceConfig | None = None) -> int:
             return sent
 
 
+def _establish_session(config: DeviceConfig, pem: bytes) -> cs.RecordSession:
+    client = cs.LegacyClient(cs.load_public_key(pem))
+    request, session = client.open_session()
+    _post_json(f"{config.gateway_url}/legacy/session", request.to_dict(), config.timeout)
+    log.info(
+        "session established with gateway",
+        extra={"session_id": request.session_id, "suite": request.suite},
+    )
+    return session
+
+
+def _send_with_rehandshake(
+    config: DeviceConfig,
+    pem: bytes,
+    session: cs.RecordSession,
+    reading: WeatherReading,
+) -> cs.RecordSession:
+    try:
+        _send(config, session, reading)
+        return session
+    except SessionNeedsRehandshake as exc:
+        log.info("session unavailable; re-handshaking once", extra={"reason": str(exc)})
+        replacement = _establish_session(config, pem)
+        # Exactly one retry of the current reading. A second exhaustion is loud
+        # rather than turning into an unbounded reconnect loop or silent loss.
+        _send(config, replacement, reading)
+        return replacement
+
+
 def _send(config: DeviceConfig, session: cs.RecordSession, reading: WeatherReading) -> None:
-    frame = session.seal(reading.to_json().encode("utf-8"))
+    try:
+        frame = session.seal(reading.to_json().encode("utf-8"))
+    except cs.RecordSessionExhausted as exc:
+        raise SessionNeedsRehandshake(str(exc)) from exc
     try:
         _post_json(f"{config.gateway_url}/legacy/frames", frame.to_dict(), config.timeout)
     except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            raise SessionNeedsRehandshake("gateway rejected the expired session") from exc
         log.error(
             "gateway rejected frame",
             extra={"seq": frame.seq, "status": exc.code, "date": reading.date},

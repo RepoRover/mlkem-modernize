@@ -21,7 +21,11 @@ case "$MODE" in
   *) echo "usage: $0 [baseline|modern] [seconds]" >&2; exit 2 ;;
 esac
 
-cleanup() { docker compose -f "$COMPOSE" down -v >/dev/null 2>&1 || true; }
+EVIDENCE_DIR="$(mktemp -d)"
+cleanup() {
+  docker compose -f "$COMPOSE" down -v >/dev/null 2>&1 || true
+  rm -rf "$EVIDENCE_DIR"
+}
 trap cleanup EXIT
 
 echo "==> building images"
@@ -30,12 +34,19 @@ echo "==> building images"
 docker compose -f "$COMPOSE" --profile attack build >/dev/null 2>&1
 
 echo "==> starting the $MODE stack"
-cleanup
+docker compose -f "$COMPOSE" down -v >/dev/null 2>&1 || true
 docker compose -f "$COMPOSE" up -d >/dev/null 2>&1
 
 echo "==> letting the device transmit for ${RUN_SECONDS}s"
 sleep "$RUN_SECONDS"
 
-echo "==> running the passive attacker against the captured traffic"
+echo "==> collecting strict attack and cloud-storage evidence"
 docker compose -f "$COMPOSE" --profile attack run --rm -T harvester --format json \
-    2>/dev/null | python3 scripts/check_attack_report.py "$MODE"
+    >"$EVIDENCE_DIR/attack.json" 2>/dev/null
+python3 - <<'PY' >"$EVIDENCE_DIR/cloud.json"
+import urllib.request
+with urllib.request.urlopen("http://127.0.0.1:8000/readings?limit=1", timeout=5) as response:
+    print(response.read().decode("utf-8"))
+PY
+python3 scripts/check_attack_report.py \
+    "$MODE" "$EVIDENCE_DIR/attack.json" "$EVIDENCE_DIR/cloud.json"

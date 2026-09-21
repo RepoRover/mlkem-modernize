@@ -26,6 +26,23 @@ x-healthcheck-python: &healthcheck-python
   start_period: 3s
 
 services:
+  # The dual-stack cloud still authenticates its unused hybrid endpoint. The
+  # baseline gateway remains explicitly legacy and receives no ML-DSA secret.
+  identity-provisioner:
+    <<: *node
+    command: ["python", "-m", "services.identity_provisioner"]
+    environment:
+      CLOUD_IDENTITY_PATH: /run/cloud-identity-private/cloud_mldsa.key
+      CLOUD_IDENTITY_PUBLIC_KEY_PATH: /run/cloud-identity-public/cloud_mldsa.pub
+      GATEWAY_IDENTITY_PATH: /run/gateway-identity-private/gateway_mldsa.key
+      GATEWAY_IDENTITY_PUBLIC_KEY_PATH: /run/gateway-identity-public/gateway_mldsa.pub
+    volumes:
+      - cloud-identity-private:/run/cloud-identity-private
+      - cloud-identity-public:/run/cloud-identity-public
+      - gateway-identity-private:/run/gateway-identity-private
+      - gateway-identity-public:/run/gateway-identity-public
+    network_mode: none
+
   cloud:
     <<: *node
     command: ["python", "-m", "services.cloud"]
@@ -34,14 +51,18 @@ services:
       PORT: "8000"
       CLOUD_DB_PATH: /var/lib/node/readings.db
       CLOUD_KEY_PATH: /var/lib/node/cloud_rsa.pem
-      # The cloud is a modern node and always exposes the post-quantum
-      # endpoints, so it needs a writable identity path even in this baseline
-      # where nothing uses them.
-      CLOUD_IDENTITY_PATH: /var/lib/node/cloud_mldsa.key
+      # The cloud remains dual-stack, but the baseline gateway below explicitly
+      # selects legacy so measurements still reproduce the pre-migration link.
+      CLOUD_IDENTITY_PATH: /run/cloud-identity-private/cloud_mldsa.key
+      GATEWAY_IDENTITY_PUBLIC_KEY_PATH: /run/gateway-identity-public/gateway_mldsa.pub
     volumes:
       - cloud-state:/var/lib/node
+      - cloud-identity-private:/run/cloud-identity-private:ro
+      - gateway-identity-public:/run/gateway-identity-public:ro
     networks: [backbone]
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      identity-provisioner: {condition: service_completed_successfully}
     healthcheck:
       <<: *healthcheck-python
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
@@ -82,12 +103,12 @@ services:
     # The gateway straddles both segments. That position is what lets it
     # terminate the device's legacy session and open a separate session onward.
     networks: [edge, backbone]
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]
     depends_on:
       tap-backbone: {condition: service_healthy}
     healthcheck:
       <<: *healthcheck-python
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/readyz')"]
 
   tap-edge:
     <<: *node
@@ -172,5 +193,9 @@ networks:
 
 volumes:
   cloud-state:
+  cloud-identity-private:
+  cloud-identity-public:
+  gateway-identity-private:
+  gateway-identity-public:
   gateway-state:
   capture:

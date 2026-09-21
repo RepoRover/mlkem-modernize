@@ -9,11 +9,13 @@ from pqcnode.config import (
     env_str,
 )
 from pqcnode.logs import JsonFormatter, bind, configure, correlation_id
-from pqcnode.sessions import SessionNotFound, SessionStore
+from pqcnode.sessions import SessionAlreadyUsed, SessionHistoryFull, SessionNotFound, SessionStore
 
 __all__ = [
     "ConfigError",
     "JsonFormatter",
+    "SessionAlreadyUsed",
+    "SessionHistoryFull",
     "SessionNotFound",
     "SessionStore",
     "bind",

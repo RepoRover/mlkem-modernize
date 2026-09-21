@@ -7,11 +7,13 @@ byte on both links, stores traffic indefinitely, and later acquires a
 cryptographically relevant quantum computer. This is the weakest realistic
 network attacker, chosen deliberately: the legacy suite already loses to it.
 
-The `tap` service implements exactly this. It forwards traffic untouched and
-records a copy. A capture write failure is swallowed and counted rather than
-propagated, because a wiretap that breaks the link it observes is not passive —
-an earlier version returned HTTP 500 to the device when its disk write failed,
-which was a modelling bug as much as a code bug.
+The `tap` service implements this for normal protocol traffic. It relays the
+same application body and records a copy, with explicit request/response,
+wall-clock, recorded-field, and capture-file ceilings so the teaching component
+cannot buffer without bound. Oversized, compressed, or timed-out traffic is
+rejected. A capture write failure or full capture budget is counted and stops
+recording without interrupting otherwise valid relay, because a wiretap whose
+disk fills should not take the victim link down.
 
 ## What "Shor succeeded" means here
 
@@ -31,9 +33,12 @@ long-term key retroactively opens every archived session — not the method.
 | Modify, reorder, replay, or splice frames | Rejected. Suite, session id, and sequence number are all bound into the AEAD tag. Covered in `tests/negative/`. |
 | Substitute its own ephemeral KEM keys | Rejected. The offer is ML-DSA-65 signed by the cloud's long-term identity. |
 | Substitute both `/pqc/identity` and a self-signed offer | Rejected. The gateway verifies against an out-of-band read-only pin and does not fetch `/pqc/identity` for trust. |
-| Replay a captured post-quantum handshake | Rejected. Offers are single-use and expire. |
-| Replay a captured *legacy* handshake under a new label | **Succeeds.** The legacy suite does not bind the handshake to its session id. Documented, tested, and unfixed — it is a property of the baseline. |
-| Exhaust memory by opening sessions | Bounded. Session stores cap both age and count. |
+| Impersonate a gateway to the hybrid cloud endpoint | Rejected. The complete request transcript is ML-DSA-65 signed and checked against the cloud's read-only gateway pin. |
+| Mutate version, suite, session id, KEM ciphertext, or X25519 share | Rejected by structural version checks, signed transcripts, or transcript-bound AEAD keys. |
+| Replay a captured post-quantum handshake | Rejected. Offers are authenticated, single-use, expiring, and hard bounded. |
+| Replay a captured legacy handshake with the same id | Rejected while the process retains its fail-closed replay marker; succeeds after restart because history is not durable. |
+| Relabel a captured legacy handshake | The unauthenticated handshake can establish the wrapped key under a new canonical id, but captured frames cannot be relabelled because their original id is AEAD-bound. |
+| Exhaust memory by opening sessions or offers | Retained keys and offers are bounded. History saturation fails closed; CPU, request bodies at the endpoints, bandwidth, and availability are not fully protected. |
 
 ## Out of scope
 
@@ -45,15 +50,23 @@ KMS or HSM; this is recorded in [risks.md](risks.md) rather than solved.
 There is no device attestation or per-device identity — the legacy handshake
 authenticates nobody.
 
-**Transport security below the application layer.** There is no TLS. All
-confidentiality comes from the application-layer suites, which is what makes the
-comparison legible; a real deployment would run both.
+**Transport security below the application layer.** There is no TLS. Backbone
+payload confidentiality and mutual gateway/cloud authentication come from the
+application-layer hybrid suite, but HTTP metadata and availability do not. This
+keeps the comparison legible; a real deployment would run both layers.
 
 **Traffic analysis.** Frame sizes, timing, and counts leak. A reading is ~119 B
 at a fixed cadence, so an observer learns the sampling rate regardless of suite.
 
 **Active downgrade at the gateway's configuration layer.** An attacker who can
-set `UPSTREAM_SUITE=legacy` has already compromised the deployment.
+set `UPSTREAM_SUITE=legacy` has already compromised the deployment. Neither the
+network nor the retained `auto` spelling can select legacy.
+
+**Restart-spanning replay.** Active and recent session identifiers are tracked
+only in bounded process memory. Restart clears that history. A captured legacy
+handshake and its frames can therefore be replayed after restart; hybrid offer
+private keys disappear on restart, so its captured handshake cannot complete.
+Durable anti-replay state is out of scope.
 
 ## The residual exposure
 

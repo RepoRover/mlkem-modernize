@@ -88,6 +88,22 @@ def test_encapsulate_returns_the_secret_before_the_ciphertext():
     assert private_key.decapsulate(second) == first
 
 
+def test_encapsulation_key_coefficients_enforce_the_fips_203_modulus_boundary():
+    """FIPS 203 encoding accepts q-1 and rejects coefficients at or above q."""
+    raw = mlkem.MLKEM768PrivateKey.generate().public_key().public_bytes_raw()
+
+    def with_first_coefficient(value):
+        changed = bytearray(raw)
+        changed[0] = value & 0xFF
+        changed[1] = (changed[1] & 0xF0) | ((value >> 8) & 0x0F)
+        return bytes(changed)
+
+    mlkem.MLKEM768PublicKey.from_public_bytes(with_first_coefficient(3328))
+    for invalid in (3329, 3500, 4095):
+        with pytest.raises(ValueError):
+            mlkem.MLKEM768PublicKey.from_public_bytes(with_first_coefficient(invalid))
+
+
 def test_corrupted_ciphertexts_are_implicitly_rejected_identically():
     """FIPS 203 mandates implicit rejection, and both agree on the result.
 

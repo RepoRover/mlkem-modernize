@@ -68,15 +68,21 @@ def benchmark_legacy(iterations: int = DEFAULT_ITERATIONS) -> SuiteBenchmark:
 def benchmark_hybrid(iterations: int = DEFAULT_ITERATIONS) -> SuiteBenchmark:
     """Measure the post-quantum suite the same way the legacy one is measured."""
     identity = cs.generate_identity_key()
-    server = cs.HybridServer(identity)
-    client = cs.HybridClient(identity.public_key())
+    gateway_identity = cs.generate_identity_key()
+    pool_size = max(iterations // 4, 10)
+    server = cs.HybridServer(
+        identity,
+        gateway_identity.public_key(),
+        # Initial offer + server pool + Timing.measure's untimed warmup and samples.
+        max_pending_offers=iterations + pool_size + 3,
+    )
+    client = cs.HybridClient(identity.public_key(), gateway_identity)
 
     # One offer, reused for client-side measurements. The server consumes an
     # offer on accept, so those need a pre-built pool instead.
     offer = server.make_offer()
     request, client_session = client.open_session(offer)
 
-    pool_size = max(iterations // 4, 10)
     pool = []
     for _ in range(pool_size + 1):
         pooled_offer = server.make_offer()
@@ -117,7 +123,8 @@ def benchmark_hybrid(iterations: int = DEFAULT_ITERATIONS) -> SuiteBenchmark:
             "mlkem_public_key": len(offer.mlkem_pub),
             "mlkem_ciphertext": len(b64d(request.kem_payload["mlkem_ct"])),
             "x25519_public_key": len(offer.x25519_pub),
-            "mldsa_signature": len(offer.signature),
+            "cloud_mldsa_signature": len(offer.signature),
+            "gateway_mldsa_signature": len(b64d(request.kem_payload["gateway_signature"])),
             "data_frame_ciphertext": len(sealed.ciphertext),
             "aead_overhead": len(sealed.ciphertext) - len(SAMPLE_PAYLOAD),
         },
@@ -125,6 +132,6 @@ def benchmark_hybrid(iterations: int = DEFAULT_ITERATIONS) -> SuiteBenchmark:
             "forward_secrecy": True,
             "key_derivation": "HKDF-SHA256 over ss_pq || ss_ec, salted with the transcript hash",
             "transcript_binding": True,
-            "authentication": "ML-DSA-65 signature over the ephemeral offer",
+            "authentication": "pinned ML-DSA-65 signatures from cloud and gateway",
         },
     )

@@ -9,6 +9,7 @@ only appear when the services talk to each other.
 
 import importlib
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -29,6 +30,10 @@ def _build_cloud(tmp_path, monkeypatch, allow_legacy: bool):
     monkeypatch.setenv("CLOUD_DB_PATH", str(tmp_path / "readings.db"))
     monkeypatch.setenv("CLOUD_KEY_PATH", str(tmp_path / "cloud_rsa.pem"))
     monkeypatch.setenv("CLOUD_IDENTITY_PATH", str(tmp_path / "cloud_mldsa.key"))
+    gateway_identity = cs.load_or_create_identity(tmp_path / "gateway_mldsa.key")
+    gateway_pin = tmp_path / "gateway_mldsa.pub"
+    gateway_pin.write_bytes(cs.serialize_identity_public(gateway_identity.public_key()))
+    monkeypatch.setenv("GATEWAY_IDENTITY_PUBLIC_KEY_PATH", str(gateway_pin))
     monkeypatch.setenv("ALLOW_LEGACY_SUITE", "true" if allow_legacy else "false")
 
     import services.cloud.app as cloud_module
@@ -46,6 +51,7 @@ def _build_gateway(tmp_path, monkeypatch, cloud_app, upstream_suite: str):
         identity_pin = tmp_path / "cloud_mldsa.pub"
         identity_pin.write_bytes(cs.serialize_identity_public(private_key.public_key()))
         monkeypatch.setenv("CLOUD_IDENTITY_PUBLIC_KEY_PATH", str(identity_pin))
+        monkeypatch.setenv("GATEWAY_IDENTITY_PATH", str(tmp_path / "gateway_mldsa.key"))
 
     import services.gateway.app as gateway_module
 
@@ -102,7 +108,8 @@ def test_readings_reach_the_cloud_over_the_configured_suite(
 def test_mitm_substituting_identity_and_signed_offer_is_rejected(tmp_path, monkeypatch):
     """The HTTP identity cannot authorize an attacker-controlled signed offer."""
     legitimate_cloud = _build_cloud(tmp_path, monkeypatch, allow_legacy=False)
-    attacker = cs.HybridServer(cs.generate_identity_key())
+    gateway_identity = cs.load_identity_private((tmp_path / "gateway_mldsa.key").read_bytes())
+    attacker = cs.HybridServer(cs.generate_identity_key(), gateway_identity.public_key())
     identity_requests = 0
     session_requests = 0
     mitm = FastAPI()
@@ -174,6 +181,22 @@ def test_health_and_readiness_probes_respond(tmp_path, monkeypatch):
         assert gateway.get("/readyz").json()["status"] == "ready"
 
 
+def test_gateway_liveness_survives_an_unusable_secure_upstream(tmp_path, monkeypatch):
+    cloud_app = _build_cloud(tmp_path, monkeypatch, allow_legacy=False)
+    gateway_app = _build_gateway(tmp_path, monkeypatch, cloud_app, "hybrid")
+
+    import services.gateway.app as gateway_module
+
+    gateway_module._upstream._client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, stream=httpx.ByteStream(b'{"status":"unready"}'))
+        )
+    )
+    with TestClient(gateway_app) as gateway:
+        assert gateway.get("/healthz").status_code == 200
+        assert gateway.get("/readyz").status_code == 503
+
+
 def test_a_replayed_frame_is_refused_by_the_gateway(tmp_path, monkeypatch):
     cloud_app = _build_cloud(tmp_path, monkeypatch, allow_legacy=True)
     gateway_app = _build_gateway(tmp_path, monkeypatch, cloud_app, "legacy")
@@ -187,6 +210,62 @@ def test_a_replayed_frame_is_refused_by_the_gateway(tmp_path, monkeypatch):
         frame = session.seal(b'{"date":"2024-01-01"}')
         assert gateway.post("/legacy/frames", json=frame.to_dict()).status_code == 200
         assert gateway.post("/legacy/frames", json=frame.to_dict()).status_code == 400
+
+
+def test_replayed_legacy_handshake_cannot_reset_frame_replay_state(tmp_path, monkeypatch):
+    cloud_app = _build_cloud(tmp_path, monkeypatch, allow_legacy=True)
+    gateway_app = _build_gateway(tmp_path, monkeypatch, cloud_app, "legacy")
+
+    with TestClient(cloud_app) as cloud, TestClient(gateway_app) as gateway:
+        pem = gateway.get("/legacy/pubkey").content
+        client = cs.LegacyClient(cs.load_public_key(pem))
+        request, session = client.open_session()
+        assert gateway.post("/legacy/session", json=request.to_dict()).status_code == 200
+
+        frame = session.seal(READINGS[0].to_json().encode())
+        assert gateway.post("/legacy/frames", json=frame.to_dict()).status_code == 200
+        assert gateway.post("/legacy/session", json=request.to_dict()).status_code == 409
+        assert cloud.get("/readyz").json()["sessions"] == 1
+        assert gateway.post("/legacy/frames", json=frame.to_dict()).status_code == 400
+
+
+def test_gateway_drops_an_exhausted_session_and_requests_rehandshake(tmp_path, monkeypatch):
+    from pqcsuite import record as record_module
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(record_module.time, "monotonic", lambda: clock["now"])
+    cloud_app = _build_cloud(tmp_path, monkeypatch, allow_legacy=True)
+    gateway_app = _build_gateway(tmp_path, monkeypatch, cloud_app, "legacy")
+
+    with TestClient(cloud_app), TestClient(gateway_app) as gateway:
+        pem = gateway.get("/legacy/pubkey").content
+        request, session = cs.LegacyClient(cs.load_public_key(pem)).open_session()
+        assert gateway.post("/legacy/session", json=request.to_dict()).status_code == 200
+        frame = session.seal(READINGS[0].to_json().encode())
+        clock["now"] = 901.0
+
+        response = gateway.post("/legacy/frames", json=frame.to_dict())
+        assert response.status_code == 409
+        assert gateway.get("/readyz").json()["sessions"] == 0
+
+
+def test_gateway_drops_downstream_session_when_cloud_requests_rehandshake(tmp_path, monkeypatch):
+    cloud_app = _build_cloud(tmp_path, monkeypatch, allow_legacy=True)
+    gateway_app = _build_gateway(tmp_path, monkeypatch, cloud_app, "legacy")
+
+    import services.cloud.app as cloud_module
+
+    with TestClient(cloud_app), TestClient(gateway_app) as gateway:
+        pem = gateway.get("/legacy/pubkey").content
+        request, session = cs.LegacyClient(cs.load_public_key(pem)).open_session()
+        assert gateway.post("/legacy/session", json=request.to_dict()).status_code == 200
+        for upstream_id in list(cloud_module._sessions._entries):
+            cloud_module._sessions.drop(upstream_id)
+
+        frame = session.seal(READINGS[0].to_json().encode())
+        response = gateway.post("/legacy/frames", json=frame.to_dict())
+        assert response.status_code == 409
+        assert gateway.get("/readyz").json()["sessions"] == 0
 
 
 def test_frames_for_an_unknown_session_are_refused(tmp_path, monkeypatch):

@@ -44,7 +44,9 @@ separate gateway public-key pin before either network service starts. The cloud
 and gateway then receive only their half in read-only volumes. The gateway will
 not start in `hybrid` or `auto` mode if
 `CLOUD_IDENTITY_PUBLIC_KEY_PATH` is absent or malformed; `/pqc/identity` is
-informational and is never a trust bootstrap. `hybrid` is the default; `auto`
+informational and is never a trust bootstrap. The same provisioner gives the
+gateway a separate ML-DSA signing key and mounts its public pin at the cloud, so
+the hybrid handshake is mutually authenticated. `hybrid` is the default; `auto`
 is a fail-closed compatibility alias, and rollback requires explicit
 `UPSTREAM_SUITE=legacy` configuration.
 
@@ -54,9 +56,37 @@ Then query what arrived, and note that nothing quantum-vulnerable reached it:
 curl -s localhost:8000/readings?limit=3 | python3 -m json.tool
 ```
 
+## Operational security controls
+
+The modern deployment sets a hard pending-offer cap and bounded gateway HTTP
+responses, retry attempts, per-attempt timeout, and total GET deadline. The tap
+also bounds request/response bytes, relay duration, recorded fields, and capture
+storage. GETs may retry with capped backoff; state-changing handshake and frame
+POSTs do not, because an ambiguous response cannot safely be replayed. `/healthz`
+reports only process liveness, while the Compose gateway health gate uses
+`/readyz` and requires a reachable configured upstream. Local identity parsing
+happens at startup and fails closed.
+
+Canonical 16-character lowercase-hex session identifiers cannot replace active
+sessions and remain blocked for 30 minutes from admission in the configured
+in-memory history. If that history fills before markers expire, admission fails
+closed rather than
+evicting replay protection. Both history and active sessions are lost on
+restart; see [docs/risks.md](docs/risks.md). Sender and receiver record keys
+have age and count limits; the device re-handshakes and retries the current
+reading once when its session is exhausted or the gateway returns HTTP 409.
+
+What is post-quantum protected is deliberately narrow: backbone payload
+confidentiality uses ML-KEM-768 plus X25519, and both handshake directions use
+pinned ML-DSA-65 identities. The device link remains RSA-based, and HTTP
+metadata, timing, and availability are not hidden.
+
 ## The demonstration
 
-One script proves the migration actually changed something:
+One script proves the migration actually changed something. It requires both
+links, nonzero frames, exact expected suites, complete decryption on readable
+links, zero backbone decryption in modern mode, and a cloud-stored reading under
+the expected backbone suite:
 
 ```bash
 ./scripts/verify_migration.sh baseline   # both links readable
@@ -118,5 +148,7 @@ deployment shows a healthy migration as a failure.
 uv run python -m bench comparison 300
 ```
 
-Results land in `bench/results/`. Numbers quoted in the docs were captured on
-arm64 with Python 3.13 and cryptography 50.0.1.
+Results land in `bench/results/`. Checked-in and quoted timing numbers were
+captured on arm64 with Python 3.13 and cryptography 50.0.1 before Phase 2 added
+gateway ML-DSA authentication. They are immutable historical lower bounds, not
+current mutual-authentication measurements; rerun the command for current data.

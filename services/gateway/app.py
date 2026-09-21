@@ -18,7 +18,7 @@ import pqcsuite as cs
 from pqcnode.config import env_float, env_int, env_path, env_str
 from pqcwire.frames import DataFrame, FrameError, HandshakeRequest
 from services import metrics
-from services.gateway.upstream import UpstreamError, build_upstream
+from services.gateway.upstream import UpstreamError, UpstreamSessionRejected, build_upstream
 
 SERVICE = "gateway"
 
@@ -34,14 +34,20 @@ _legacy_server = cs.LegacyServer(_private_key)
 # before serving traffic, so a missing or malformed pin prevents startup rather
 # than falling back to a network-fetched identity or to the legacy suite.
 _upstream_mode = env_str("UPSTREAM_SUITE", "hybrid").strip().lower()
-_identity_path = (
-    env_path("CLOUD_IDENTITY_PUBLIC_KEY_PATH") if _upstream_mode in {"hybrid", "auto"} else None
-)
+_hybrid_mode = _upstream_mode in {"hybrid", "auto"}
+_identity_path = env_path("CLOUD_IDENTITY_PUBLIC_KEY_PATH") if _hybrid_mode else None
+_gateway_identity_path = env_path("GATEWAY_IDENTITY_PATH") if _hybrid_mode else None
 _upstream = build_upstream(
     env_str("CLOUD_URL", "http://cloud:8000"),
     _upstream_mode,
     timeout=env_float("UPSTREAM_TIMEOUT_SECONDS", 5.0),
     identity_path=_identity_path,
+    gateway_identity_path=_gateway_identity_path,
+    deadline=env_float("UPSTREAM_TOTAL_DEADLINE_SECONDS", 12.0),
+    retry_attempts=env_int("UPSTREAM_RETRY_ATTEMPTS", 3),
+    retry_initial=env_float("UPSTREAM_RETRY_INITIAL_SECONDS", 0.1),
+    retry_max=env_float("UPSTREAM_RETRY_MAX_SECONDS", 1.0),
+    max_response_bytes=env_int("UPSTREAM_MAX_RESPONSE_BYTES", 32768),
 )
 
 metrics.record_suite(SERVICE, "downstream", _legacy_server.suite)
@@ -57,9 +63,12 @@ log.info(
 )
 
 # Maps a device session to the independent upstream session that relays it.
+_session_max_entries = env_int("SESSION_MAX_ENTRIES", 512)
 _sessions: pqcnode.SessionStore[tuple[cs.RecordSession, cs.RecordSession]] = pqcnode.SessionStore(
     ttl_seconds=env_int("SESSION_TTL_SECONDS", 900),
-    max_entries=env_int("SESSION_MAX_ENTRIES", 512),
+    max_entries=_session_max_entries,
+    history_ttl_seconds=env_int("SESSION_ID_HISTORY_TTL_SECONDS", 1800),
+    history_max_entries=env_int("SESSION_ID_HISTORY_MAX_ENTRIES", 2 * _session_max_entries),
 )
 
 
@@ -70,7 +79,12 @@ def healthz() -> dict[str, str]:
 
 @app.get("/readyz")
 def readyz() -> JSONResponse:
-    return JSONResponse({"status": "ready", "sessions": len(_sessions)})
+    try:
+        _upstream.ready()
+    except UpstreamError as exc:
+        log.warning("readiness probe found unusable upstream", extra={"error": str(exc)})
+        return JSONResponse({"status": "unready", "suite": _upstream.suite}, status_code=503)
+    return JSONResponse({"status": "ready", "sessions": len(_sessions), "suite": _upstream.suite})
 
 
 @app.get("/metrics")
@@ -99,11 +113,23 @@ def legacy_pubkey() -> Response:
 def legacy_session(body: dict[str, Any]) -> dict[str, str]:
     try:
         request = HandshakeRequest.from_dict(body)
+        _sessions.ensure_unused(request.session_id)
         downstream = _legacy_server.accept(request)
     except FrameError as exc:
         metrics.record_handshake(SERVICE, str(body.get("suite", "unknown")), "rejected")
         log.warning("rejected device handshake", extra={"error": str(exc)})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except pqcnode.SessionAlreadyUsed as exc:
+        metrics.record_handshake(SERVICE, str(body.get("suite", "unknown")), "replayed")
+        log.warning(
+            "rejected reused session identifier",
+            extra={"session_id": str(body.get("session_id", "unknown"))},
+        )
+        raise HTTPException(status_code=409, detail="session identifier was already used") from exc
+    except pqcnode.SessionHistoryFull as exc:
+        metrics.record_handshake(SERVICE, str(body.get("suite", "unknown")), "capacity")
+        log.warning("session identifier history capacity exhausted")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     try:
         upstream_id, upstream = _upstream.open_session()
@@ -112,10 +138,19 @@ def legacy_session(body: dict[str, Any]) -> dict[str, str]:
         log.error("upstream handshake failed", extra={"error": str(exc)})
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    try:
+        _sessions.put(request.session_id, (downstream, upstream))
+    except pqcnode.SessionAlreadyUsed as exc:
+        metrics.record_handshake(SERVICE, request.suite, "replayed")
+        log.warning("rejected reused session identifier", extra={"session_id": request.session_id})
+        raise HTTPException(status_code=409, detail="session identifier was already used") from exc
+    except pqcnode.SessionHistoryFull as exc:
+        metrics.record_handshake(SERVICE, request.suite, "capacity")
+        log.warning("session identifier history capacity exhausted")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     metrics.record_handshake(SERVICE, request.suite, "established")
     metrics.record_handshake(SERVICE, _upstream.suite, "established")
-
-    _sessions.put(request.session_id, (downstream, upstream))
     log.info(
         "relay session established",
         extra={
@@ -142,6 +177,10 @@ def legacy_frame(body: dict[str, Any]) -> dict[str, Any]:
 
     try:
         plaintext = downstream.open(frame)
+    except cs.RecordSessionExhausted as exc:
+        _sessions.drop(frame.session_id)
+        metrics.record_frame(SERVICE, frame.suite, "session_exhausted")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except FrameError as exc:
         metrics.record_frame(SERVICE, frame.suite, "rejected")
         log.warning(
@@ -158,6 +197,14 @@ def legacy_frame(body: dict[str, Any]) -> dict[str, Any]:
         with metrics.timed(metrics.CRYPTO_OPERATION, service=SERVICE, operation="reseal_upstream"):
             resealed = upstream.seal(plaintext)
         _upstream.send(resealed)
+    except FrameError as exc:
+        _sessions.drop(frame.session_id)
+        metrics.record_frame(SERVICE, _upstream.suite, "session_exhausted")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UpstreamSessionRejected as exc:
+        _sessions.drop(frame.session_id)
+        metrics.record_frame(SERVICE, _upstream.suite, "session_exhausted")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except UpstreamError as exc:
         metrics.record_frame(SERVICE, _upstream.suite, "upstream_failed")
         log.error(

@@ -40,11 +40,30 @@ _legacy_server = cs.LegacyServer(
 _identity_key = cs.load_or_create_identity(
     env_path("CLOUD_IDENTITY_PATH", "run/cloud/cloud_mldsa.key")
 )
-_hybrid_server = cs.HybridServer(_identity_key, ttl_seconds=env_int("OFFER_TTL_SECONDS", 60))
+_gateway_identity_path = env_path("GATEWAY_IDENTITY_PUBLIC_KEY_PATH")
+try:
+    _gateway_identity = cs.load_identity_public(_gateway_identity_path.read_bytes())
+except OSError as exc:
+    raise pqcnode.ConfigError(
+        f"cannot read pinned gateway identity key {_gateway_identity_path}: {exc}"
+    ) from exc
+except (TypeError, ValueError) as exc:
+    raise pqcnode.ConfigError(
+        f"pinned gateway identity key {_gateway_identity_path} is malformed: {exc}"
+    ) from exc
+_hybrid_server = cs.HybridServer(
+    _identity_key,
+    _gateway_identity,
+    ttl_seconds=env_int("OFFER_TTL_SECONDS", 60),
+    max_pending_offers=env_int("MAX_PENDING_OFFERS", 128),
+)
 
+_session_max_entries = env_int("SESSION_MAX_ENTRIES", 512)
 _sessions: pqcnode.SessionStore[cs.RecordSession] = pqcnode.SessionStore(
     ttl_seconds=env_int("SESSION_TTL_SECONDS", 900),
-    max_entries=env_int("SESSION_MAX_ENTRIES", 512),
+    max_entries=_session_max_entries,
+    history_ttl_seconds=env_int("SESSION_ID_HISTORY_TTL_SECONDS", 1800),
+    history_max_entries=env_int("SESSION_ID_HISTORY_MAX_ENTRIES", 2 * _session_max_entries),
 )
 
 for _suite in cs.supported_suites() if _allow_legacy else [HYBRID_PQC]:
@@ -127,7 +146,7 @@ def pqc_identity() -> dict[str, str]:
 
 
 @app.get("/pqc/offer")
-def pqc_offer() -> dict[str, str]:
+def pqc_offer() -> dict[str, Any]:
     """Issue a signed, single-use set of ephemeral KEM public keys.
 
     Ephemeral keys are what give the modernized link forward secrecy: they are
@@ -139,6 +158,9 @@ def pqc_offer() -> dict[str, str]:
     except cs.CapabilityError as exc:
         log.error("cannot issue a post-quantum offer", extra={"error": str(exc)})
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except cs.OfferCapacityError as exc:
+        log.warning("post-quantum offer capacity exhausted")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     log.info("offer issued", extra={"key_id": offer.key_id, "suite": HYBRID_PQC})
     return offer.to_dict()
 
@@ -192,6 +214,7 @@ def _establish(
     try:
         with metrics.timed(metrics.HANDSHAKE_DURATION, service=SERVICE, suite=declared):
             request = HandshakeRequest.from_dict(body)
+            _sessions.ensure_unused(request.session_id)
             session = accept(request)
     except FrameError as exc:
         metrics.record_handshake(SERVICE, declared, "rejected")
@@ -200,10 +223,29 @@ def _establish(
     except cs.CapabilityError as exc:
         metrics.record_handshake(SERVICE, declared, "unsupported")
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except pqcnode.SessionAlreadyUsed as exc:
+        metrics.record_handshake(SERVICE, declared, "replayed")
+        log.warning(
+            "rejected reused session identifier",
+            extra={"session_id": str(body.get("session_id", "unknown"))},
+        )
+        raise HTTPException(status_code=409, detail="session identifier was already used") from exc
+    except pqcnode.SessionHistoryFull as exc:
+        metrics.record_handshake(SERVICE, declared, "capacity")
+        log.warning("session identifier history capacity exhausted")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    try:
+        _sessions.put(request.session_id, session)
+    except pqcnode.SessionAlreadyUsed as exc:
+        metrics.record_handshake(SERVICE, request.suite, "replayed")
+        log.warning("rejected reused session identifier", extra={"session_id": request.session_id})
+        raise HTTPException(status_code=409, detail="session identifier was already used") from exc
+    except pqcnode.SessionHistoryFull as exc:
+        metrics.record_handshake(SERVICE, request.suite, "capacity")
+        log.warning("session identifier history capacity exhausted")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     metrics.record_handshake(SERVICE, request.suite, "established")
-
-    _sessions.put(request.session_id, session)
     spec = suite_spec(request.suite)
     log.info(
         "session established",
@@ -230,6 +272,10 @@ def _accept_frame(body: dict[str, Any]) -> dict[str, Any]:
 
     try:
         plaintext = session.open(frame)
+    except cs.RecordSessionExhausted as exc:
+        _sessions.drop(frame.session_id)
+        metrics.record_frame(SERVICE, frame.suite, "session_exhausted")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except FrameError as exc:
         metrics.record_frame(SERVICE, frame.suite, "rejected")
         log.warning(

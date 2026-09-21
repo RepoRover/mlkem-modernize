@@ -18,6 +18,7 @@ was assessed rather than trusted.
 | [04](04-defects-found-by-running.md) | Defects that only appeared when the system ran |
 | [05](05-outstanding-review.md) | What still needs human review before submission |
 | [06](06-found-by-a-human-reading-the-output.md) | A correct system reporting itself incorrectly |
+| [07](07-phase-2-hardening.md) | Selective replay, authentication, resource, and HTTP hardening |
 
 ## Method used
 

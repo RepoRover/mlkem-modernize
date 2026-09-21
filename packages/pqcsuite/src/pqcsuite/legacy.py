@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from pqcsuite.record import KEY_LENGTH, RecordSession
 from pqcwire.frames import FrameError, HandshakeRequest, b64d, b64e
-from pqcwire.protocol import LEGACY_RSA
+from pqcwire.protocol import LEGACY_RSA, PROTOCOL_VERSION
 
 RSA_KEY_BITS = 2048
 PUBLIC_EXPONENT = 65537
@@ -113,6 +113,8 @@ class LegacyServer:
         return self._private_key.public_key()
 
     def accept(self, request: HandshakeRequest) -> RecordSession:
+        if request.version != PROTOCOL_VERSION:
+            raise FrameError(f"unsupported protocol version {request.version}")
         if request.suite != self.suite:
             raise FrameError(f"handshake suite {request.suite!r} is not {self.suite!r}")
         try:

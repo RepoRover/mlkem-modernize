@@ -10,8 +10,9 @@ Every weakness catalogued in :mod:`pqcsuite.legacy` is addressed here:
 * **Forward secrecy.** The responder's KEM keys are ephemeral and per-session.
   Compromising the long-term identity key later reveals nothing about past
   sessions -- the property the legacy suite most conspicuously lacks.
-* **Authentication.** The ephemeral offer is signed with ML-DSA-65, so an
-  active attacker cannot substitute its own keys.
+* **Mutual authentication.** The cloud signs each ephemeral offer and the
+  gateway signs its complete request transcript with separately pinned
+  ML-DSA-65 identities.
 * **Transcript binding.** The key derivation absorbs a hash of every public
   value in the handshake, so a shared secret cannot be transplanted into a
   different context.
@@ -23,6 +24,7 @@ Secret ordering in the combiner is ``ss_pq || ss_ec``, matching the
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -39,9 +41,15 @@ from pqcwire.protocol import HYBRID_PQC, PROTOCOL_VERSION
 
 _OFFER_CONTEXT = b"mlkem-modernize/offer/v1"
 _TRANSCRIPT_CONTEXT = b"mlkem-modernize/transcript/v1"
+_GATEWAY_AUTH_CONTEXT = b"mlkem-modernize/gateway-auth/v1"
 
 X25519_PUBLIC_LENGTH = 32
 DEFAULT_OFFER_TTL_SECONDS = 60.0
+DEFAULT_MAX_PENDING_OFFERS = 128
+
+
+class OfferCapacityError(RuntimeError):
+    """Raised when the bounded ephemeral-offer store is full."""
 
 
 def _mldsa() -> Any:
@@ -90,17 +98,23 @@ class Offer:
     mlkem_pub: bytes
     x25519_pub: bytes
     signature: bytes
+    version: int = PROTOCOL_VERSION
+    suite: str = HYBRID_PQC
 
     def signed_bytes(self) -> bytes:
         return canonical(
             _OFFER_CONTEXT,
+            self.version.to_bytes(4, "big"),
+            self.suite.encode("utf-8"),
             self.key_id.encode("utf-8"),
             self.mlkem_pub,
             self.x25519_pub,
         )
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
+            "v": self.version,
+            "suite": self.suite,
             "key_id": self.key_id,
             "mlkem_pub": b64e(self.mlkem_pub),
             "x25519_pub": b64e(self.x25519_pub),
@@ -110,17 +124,32 @@ class Offer:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Offer:
         try:
+            version = raw["v"]
+            suite = raw["suite"]
+            key_id = raw["key_id"]
+            if not isinstance(version, int) or isinstance(version, bool):
+                raise FrameError("offer protocol version has the wrong type")
+            if version != PROTOCOL_VERSION:
+                raise FrameError(f"unsupported protocol version {version}")
+            if not isinstance(suite, str) or suite != HYBRID_PQC:
+                raise FrameError(f"unsupported offer suite {suite!r}")
+            if not isinstance(key_id, str) or not key_id:
+                raise FrameError("offer key_id must be a non-empty string")
             return cls(
-                key_id=str(raw["key_id"]),
+                key_id=key_id,
                 mlkem_pub=b64d(raw["mlkem_pub"]),
                 x25519_pub=b64d(raw["x25519_pub"]),
                 signature=b64d(raw["signature"]),
+                version=version,
+                suite=suite,
             )
         except KeyError as exc:
             raise FrameError(f"offer is missing field {exc}") from None
 
 
 def _transcript_hash(
+    version: int,
+    suite: str,
     session_id: str,
     offer: Offer,
     mlkem_ct: bytes,
@@ -130,8 +159,10 @@ def _transcript_hash(
     digest.update(
         canonical(
             _TRANSCRIPT_CONTEXT,
-            PROTOCOL_VERSION.to_bytes(4, "big"),
-            HYBRID_PQC.encode("utf-8"),
+            version.to_bytes(4, "big"),
+            suite.encode("utf-8"),
+            offer.version.to_bytes(4, "big"),
+            offer.suite.encode("utf-8"),
             session_id.encode("utf-8"),
             offer.key_id.encode("utf-8"),
             offer.mlkem_pub,
@@ -141,6 +172,10 @@ def _transcript_hash(
         )
     )
     return digest.finalize()
+
+
+def _gateway_auth_bytes(transcript: bytes) -> bytes:
+    return canonical(_GATEWAY_AUTH_CONTEXT, transcript)
 
 
 def _combine(ss_pq: bytes, ss_ec: bytes, transcript: bytes) -> bytes:
@@ -162,10 +197,21 @@ class HybridServer:
 
     suite = HYBRID_PQC
 
-    def __init__(self, identity_key: Any, ttl_seconds: float = DEFAULT_OFFER_TTL_SECONDS) -> None:
+    def __init__(
+        self,
+        identity_key: Any,
+        gateway_identity_public_key: Any,
+        ttl_seconds: float = DEFAULT_OFFER_TTL_SECONDS,
+        max_pending_offers: int = DEFAULT_MAX_PENDING_OFFERS,
+    ) -> None:
+        if ttl_seconds <= 0 or max_pending_offers < 1:
+            raise ValueError("offer TTL and pending-offer capacity must be positive")
         self._identity_key = identity_key
+        self._gateway_identity = gateway_identity_public_key
         self._ttl = ttl_seconds
+        self._max_pending = max_pending_offers
         self._pending: dict[str, tuple[Any, x25519.X25519PrivateKey, float]] = {}
+        self._lock = threading.Lock()
 
     @property
     def identity_public_key(self) -> Any:
@@ -173,9 +219,11 @@ class HybridServer:
 
     @property
     def pending_offers(self) -> int:
-        return len(self._pending)
+        with self._lock:
+            self._expire_locked()
+            return len(self._pending)
 
-    def _expire(self) -> None:
+    def _expire_locked(self) -> None:
         """Drop ephemeral keys past their TTL.
 
         Bounding the lifetime bounds the window in which a stolen responder
@@ -188,42 +236,50 @@ class HybridServer:
             del self._pending[key_id]
 
     def make_offer(self) -> Offer:
-        self._expire()
-        mlkem = mlkem_module()
-        key_id = os.urandom(8).hex()
-        mlkem_private = mlkem.MLKEM768PrivateKey.generate()
-        x_private = x25519.X25519PrivateKey.generate()
+        with self._lock:
+            self._expire_locked()
+            if len(self._pending) >= self._max_pending:
+                raise OfferCapacityError("pending hybrid offer capacity is exhausted")
+            mlkem = mlkem_module()
+            key_id = os.urandom(8).hex()
+            mlkem_private = mlkem.MLKEM768PrivateKey.generate()
+            x_private = x25519.X25519PrivateKey.generate()
 
-        unsigned = Offer(
-            key_id=key_id,
-            mlkem_pub=mlkem_private.public_key().public_bytes_raw(),
-            x25519_pub=_x25519_public_bytes(x_private.public_key()),
-            signature=b"",
-        )
-        signature = self._identity_key.sign(unsigned.signed_bytes())
-        self._pending[key_id] = (mlkem_private, x_private, time.monotonic() + self._ttl)
-        return Offer(
-            key_id=key_id,
-            mlkem_pub=unsigned.mlkem_pub,
-            x25519_pub=unsigned.x25519_pub,
-            signature=signature,
-        )
+            unsigned = Offer(
+                key_id=key_id,
+                mlkem_pub=mlkem_private.public_key().public_bytes_raw(),
+                x25519_pub=_x25519_public_bytes(x_private.public_key()),
+                signature=b"",
+            )
+            signature = self._identity_key.sign(unsigned.signed_bytes())
+            self._pending[key_id] = (mlkem_private, x_private, time.monotonic() + self._ttl)
+            return Offer(
+                key_id=key_id,
+                mlkem_pub=unsigned.mlkem_pub,
+                x25519_pub=unsigned.x25519_pub,
+                signature=signature,
+            )
 
     def accept(self, request: HandshakeRequest) -> RecordSession:
         if request.suite != self.suite:
             raise FrameError(f"handshake suite {request.suite!r} is not {self.suite!r}")
-        self._expire()
+        if request.version != PROTOCOL_VERSION:
+            raise FrameError(f"unsupported protocol version {request.version}")
 
         try:
             key_id = request.kem_payload["key_id"]
             mlkem_ct = b64d(request.kem_payload["mlkem_ct"])
             client_x25519_pub = b64d(request.kem_payload["x25519_pub"])
+            gateway_signature = b64d(request.kem_payload["gateway_signature"])
         except KeyError as exc:
             raise FrameError(f"hybrid handshake is missing field {exc}") from None
 
-        # Single-use: popping prevents a captured handshake from being replayed
-        # against the same ephemeral key.
-        entry = self._pending.pop(key_id, None)
+        # Look up without consuming first: unauthenticated garbage must not be
+        # able to burn scarce offers. The authenticated request atomically pops
+        # the entry below before any key agreement runs.
+        with self._lock:
+            self._expire_locked()
+            entry = self._pending.get(key_id)
         if entry is None:
             raise FrameError(f"offer {key_id!r} is unknown, expired, or already used")
         mlkem_private, x_private, _ = entry
@@ -231,32 +287,54 @@ class HybridServer:
         if len(client_x25519_pub) != X25519_PUBLIC_LENGTH:
             raise FrameError("client X25519 public key has the wrong length")
 
-        try:
-            ss_pq = mlkem_private.decapsulate(mlkem_ct)
-        except ValueError as exc:
-            raise FrameError("ML-KEM decapsulation rejected the ciphertext") from exc
-
-        ss_ec = x_private.exchange(x25519.X25519PublicKey.from_public_bytes(client_x25519_pub))
-
         offer = Offer(
             key_id=key_id,
             mlkem_pub=mlkem_private.public_key().public_bytes_raw(),
             x25519_pub=_x25519_public_bytes(x_private.public_key()),
             signature=b"",
         )
-        transcript = _transcript_hash(request.session_id, offer, mlkem_ct, client_x25519_pub)
+        transcript = _transcript_hash(
+            request.version,
+            request.suite,
+            request.session_id,
+            offer,
+            mlkem_ct,
+            client_x25519_pub,
+        )
+        try:
+            self._gateway_identity.verify(gateway_signature, _gateway_auth_bytes(transcript))
+        except InvalidSignature as exc:
+            raise FrameError("gateway handshake signature is invalid") from exc
+
+        with self._lock:
+            self._expire_locked()
+            consumed = self._pending.pop(key_id, None)
+        if consumed is not entry:
+            raise FrameError(f"offer {key_id!r} is unknown, expired, or already used")
+
+        try:
+            ss_pq = mlkem_private.decapsulate(mlkem_ct)
+        except ValueError as exc:
+            raise FrameError("ML-KEM decapsulation rejected the ciphertext") from exc
+
+        ss_ec = x_private.exchange(x25519.X25519PublicKey.from_public_bytes(client_x25519_pub))
         return RecordSession(self.suite, request.session_id, _combine(ss_pq, ss_ec, transcript))
 
 
 class HybridClient:
-    """Gateway side: verifies the offer, then encapsulates to it."""
+    """Gateway side: verifies the offer and authenticates its response."""
 
     suite = HYBRID_PQC
 
-    def __init__(self, peer_identity_public_key: Any) -> None:
+    def __init__(self, peer_identity_public_key: Any, identity_key: Any) -> None:
         self._peer_identity = peer_identity_public_key
+        self._identity_key = identity_key
 
     def verify_offer(self, offer: Offer) -> None:
+        if offer.version != PROTOCOL_VERSION:
+            raise FrameError(f"unsupported protocol version {offer.version}")
+        if offer.suite != self.suite:
+            raise FrameError(f"offer suite {offer.suite!r} is not {self.suite!r}")
         try:
             self._peer_identity.verify(offer.signature, offer.signed_bytes())
         except InvalidSignature as exc:
@@ -279,8 +357,15 @@ class HybridClient:
         client_x25519_pub = _x25519_public_bytes(x_private.public_key())
         ss_ec = x_private.exchange(x25519.X25519PublicKey.from_public_bytes(offer.x25519_pub))
 
-        transcript = _transcript_hash(session_id, offer, mlkem_ct, client_x25519_pub)
-        request = HandshakeRequest(
+        transcript = _transcript_hash(
+            PROTOCOL_VERSION,
+            self.suite,
+            session_id,
+            offer,
+            mlkem_ct,
+            client_x25519_pub,
+        )
+        unsigned_request = HandshakeRequest(
             suite=self.suite,
             session_id=session_id,
             kem_payload={
@@ -289,4 +374,30 @@ class HybridClient:
                 "x25519_pub": b64e(client_x25519_pub),
             },
         )
+        request = self.authenticate_request(unsigned_request, offer)
         return request, RecordSession(self.suite, session_id, _combine(ss_pq, ss_ec, transcript))
+
+    def authenticate_request(self, request: HandshakeRequest, offer: Offer) -> HandshakeRequest:
+        """Sign every transcript field in a fully constructed gateway request."""
+        try:
+            mlkem_ct = b64d(request.kem_payload["mlkem_ct"])
+            client_x25519_pub = b64d(request.kem_payload["x25519_pub"])
+        except KeyError as exc:
+            raise FrameError(f"hybrid handshake is missing field {exc}") from None
+        transcript = _transcript_hash(
+            request.version,
+            request.suite,
+            request.session_id,
+            offer,
+            mlkem_ct,
+            client_x25519_pub,
+        )
+        return HandshakeRequest(
+            suite=request.suite,
+            session_id=request.session_id,
+            version=request.version,
+            kem_payload={
+                **request.kem_payload,
+                "gateway_signature": b64e(self._identity_key.sign(_gateway_auth_bytes(transcript))),
+            },
+        )

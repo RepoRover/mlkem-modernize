@@ -34,8 +34,10 @@ to ignore the job. The modern nodes' dependencies **do** fail the build.
 
 ## R3 — Keys are stored unencrypted on disk
 
-RSA private keys and the ML-DSA identity seed are written to a mounted volume
-with mode 0600 and no encryption at rest. Host compromise loses everything.
+RSA private keys and both ML-DSA identity seeds are written to separate mounted
+volumes with mode 0600 and no encryption at rest. Long-running services receive
+only the secret or public pin they need, read-only, but host compromise still
+loses everything.
 
 Deliberate: the threat model is a network adversary, and the harvester demo
 needs a readable key file to stand in for Shor's algorithm. A production system
@@ -44,36 +46,40 @@ would use a KMS or HSM and never materialise the private key in process memory.
 ## R4 — Identity rotation requires coordinated downtime
 
 Long-term RSA and ML-DSA keys are generated once and have no automatic rotation
-schedule or revocation path. The gateway now pins the ML-DSA public key out of
-band, closing network bootstrap substitution, but only one pin is supported.
-Rotating it requires replacing the cloud private key and every gateway pin as a
-coordinated maintenance operation; mismatched sides fail closed and cannot open
-new sessions. Ephemeral KEM keys preserve past-session secrecy, but a compromised
-ML-DSA identity can forge offers until that manual rotation completes.
+schedule or revocation path. Cloud and gateway now pin each other's ML-DSA
+public keys out of band, closing network bootstrap substitution, but only one
+pin is supported in either direction. Rotating either identity requires
+replacing its private key and peer pin as a coordinated maintenance operation;
+mismatched sides fail closed and cannot open new sessions. Ephemeral KEM keys
+preserve past-session secrecy, but a compromised identity can impersonate its
+owner until that manual rotation completes.
 
 ## R5 — No device authentication
 
 The legacy handshake authenticates nobody. Anything that can reach the gateway
 can open a session and inject readings. The gateway accepts them and the cloud
-stores them. Bounded session stores prevent memory exhaustion, but not
-fabricated telemetry.
+stores them. Canonical identifier lengths and bounded session stores cap
+retained session-state memory, but they do not prevent CPU, bandwidth, request
+body, or handshake-capacity denial and do not stop fabricated telemetry.
 
 Out of scope as modelled, but it would be the first thing to fix in a real
 deployment — and it is unrelated to post-quantum work.
 
 ## R6 — No transport security
 
-There is no TLS on any link. All confidentiality comes from the application-layer
-suites. This makes the comparison legible — the harvester sees exactly the bytes
-the suite produced — but a real system would run TLS underneath, ideally with a
-post-quantum key exchange there too.
+There is no TLS on any link. Payload confidentiality and gateway/cloud mutual
+authentication come from the application-layer hybrid suite, but HTTP metadata,
+endpoint privacy, and availability do not. This makes the comparison legible —
+the harvester sees exactly the bytes the suite produced — but a real system
+would run TLS underneath, ideally with a post-quantum key exchange there too.
 
 ## R7 — Uneven test coverage
 
-72% overall. The remaining gaps are concentrated in `legacy_device/device.py`,
-`tap/app.py`, and the `__main__` entrypoints, all at 0%. The device and tap are
-covered end to end by the Docker integration tests but not by unit tests, so a
-refactor of their internals would not be caught quickly.
+Core protocol, device re-handshake, tap bounds, and deployment evidence have
+focused unit/integration tests. CLI entrypoints and many logging/error branches
+remain less directly covered than the cryptographic and state-machine paths.
+Coverage is useful regression evidence, not a proof that every operational
+failure has been modelled.
 
 ## R8 — Benchmarks are single-machine
 
@@ -81,16 +87,39 @@ All numbers come from one arm64 laptop. They are internally consistent and
 reproducible, but absolute figures will differ elsewhere, and the device's
 0.1 CPU quota is not reflected in them at all — the benchmarks run unconstrained.
 Comparative claims (ML-KEM keygen versus RSA keygen) are sound; absolute
-throughput claims would not be.
+throughput claims would not be. Checked-in Phase 1 timings predate mutual
+ML-DSA gateway authentication and are historical lower bounds, not current
+Phase 2 measurements.
 
-## R9 — SQLite and in-memory session state
+## R9 — SQLite and in-memory session/replay state
 
-The cloud stores readings in SQLite with a process-level lock and holds sessions
-in memory. A restart drops every session, and connected gateways get HTTP 409
-until they re-handshake — observed during development. Fine at this scale;
-neither would survive horizontal scaling.
+The cloud stores readings in SQLite with a process-level lock. Sessions, recent
+identifier history, and pending offers remain in process memory. A restart drops
+every session and replay marker; clients must re-handshake, and a captured
+legacy handshake can be accepted again after restart. Canonical identifiers
+bound retained key size, and unexpired replay markers fail admission closed when
+the history cap is reached rather than being evicted. That preserves the stated
+in-process replay window but deliberately permits handshake denial under churn.
+It does not provide durable or cross-replica replay protection. Fine at this
+scale; horizontal scaling would need shared persistent state.
 
-## R10 — Package names collided with PyPI (resolved)
+## R10 — The tap is not a production proxy
+
+The teaching tap now has request/response, relay-time, field, and capture-file
+ceilings and rejects compressed upstream responses. Capture saturation drops
+observations while continuing valid relay. It still is not hardened as an
+Internet-facing reverse proxy, and internal actors can reach services without
+passing through it; host-published gateway/cloud ports are development-only and
+bind to `127.0.0.1`.
+
+## R11 — Supply-chain artifacts are not fully pinned
+
+Container base images are tag-pinned rather than digest-pinned and runtime
+exports do not carry a complete hash-locked supply chain. Addressing registry
+immutability and signed artifact provenance is valid production debt but outside
+this focused PoC security pass.
+
+## R12 — Package names collided with PyPI (resolved)
 
 The original package names `wire` and `nodekit` both exist on PyPI. Installs
 here are path-based with `--no-deps`, so nothing resolved wrongly, but the
@@ -100,7 +129,7 @@ Renamed to `pqcwire`, `pqcnode`, and `pqcsuite`, none of which are claimed.
 Recorded because the class of problem is easy to reintroduce: any new local
 package needs a name check before it is used.
 
-## R11 — Grafana exposed a default admin account (resolved)
+## R13 — Grafana exposed a default admin account (resolved)
 
 The observability overlay disabled Grafana's login form and presented the stack
 as anonymous and read-only. It was not: the form flag leaves HTTP basic auth

@@ -37,24 +37,27 @@ exposure, and the defect a quantum adversary converts into a break.
 
 ## 2. The modernized suite — `MLKEM768-X25519-HKDF-AESGCM`
 
-Before this exchange, the gateway is provisioned out of band with the cloud's
-raw ML-DSA-65 public key. In the Compose deployment a networkless one-shot
-provisioner writes that pin to a dedicated volume, which is mounted read-only at
-`CLOUD_IDENTITY_PUBLIC_KEY_PATH`. The `/pqc/identity` response is diagnostic
-only: the gateway does not request it and it cannot replace the pin.
+Before this exchange, each side receives a separate ML-DSA-65 identity out of
+band: the gateway holds its private seed plus the cloud public pin, while the
+cloud holds its private seed plus the gateway public pin. Four separate volumes
+are mounted read-only into only the service that needs each secret or pin. The
+`/pqc/identity` response is diagnostic only: the gateway does not request it and
+it cannot replace the pin.
 
 ```
 gateway                                                        cloud
-  pk_id <- read-only local pin
+  pk_cloud <- local pin                              pk_gateway <- local pin
   <------------ GET /pqc/offer ----------------------------------
-  offer = {key_id, ek_mlkem, pk_x25519, sigma}                 (ephemeral, per session)
-  sigma = ML-DSA-65-Sign(sk_id, LP(ctx, key_id, ek_mlkem, pk_x25519))
+  offer = {version, suite, key_id, ek_mlkem, pk_x25519, sigma_cloud}
+  sigma_cloud = ML-DSA-65-Sign(sk_cloud, LP(all offer fields))
 
-  verify sigma with pk_id
+  verify sigma_cloud with pk_cloud
   (ss_pq, ct) <- ML-KEM-768.Encaps(ek_mlkem)
   (sk_e, pk_e) <- X25519.KeyGen()
   ss_ec       <- X25519(sk_e, pk_x25519)
-  ------------- {suite, session_id, key_id, ct, pk_e} ----------->
+  sigma_gateway <- ML-DSA-65-Sign(sk_gateway, LP(ctx, transcript))
+  -- {version, suite, session_id, key_id, ct, pk_e, sigma_gateway} -->
+                                      verify sigma_gateway with pk_gateway
                                             ss_pq <- Decaps(dk_mlkem, ct)
                                             ss_ec <- X25519(sk_x, pk_e)
 ```
@@ -62,7 +65,8 @@ gateway                                                        cloud
 Session key, both sides:
 
 ```
-transcript = SHA-256( LP(ctx) ‖ LP(version) ‖ LP(suite) ‖ LP(session_id)
+transcript = SHA-256( LP(ctx) ‖ LP(request_version) ‖ LP(request_suite)
+                    ‖ LP(offer_version) ‖ LP(offer_suite) ‖ LP(session_id)
                     ‖ LP(key_id) ‖ LP(ek_mlkem) ‖ LP(pk_x25519)
                     ‖ LP(ct) ‖ LP(pk_e) )
 
@@ -110,6 +114,14 @@ unauthenticated network as the offer would let a MITM substitute both and sign a
 fully self-consistent forgery. The out-of-band pin closes that bootstrap gap;
 missing, malformed, or non-matching trust material fails closed.
 
+**ML-DSA-65 over the gateway request.** A signed server offer authenticates the
+cloud but says nothing about who encapsulated to it. The gateway therefore signs
+the same complete transcript used by HKDF. The cloud checks its pinned gateway
+key before consuming the offer or decapsulating. Session-id, ciphertext,
+X25519-key, version, and suite substitution all invalidate this signature. This
+is post-quantum initiator authentication for one provisioned gateway identity;
+it is not device authentication and it is not dynamic gateway enrollment.
+
 ## 3. The record layer, shared by both suites
 
 ```
@@ -128,6 +140,10 @@ reordering and replay.
 
 The replay guard commits its high-water mark **after** tag verification, so a
 forged frame carrying a high sequence number cannot desynchronise a session.
+Each record session also has an age ceiling and permits at most 10,000 seals
+and 10,000 authenticated opens. Service session stores add configurable TTLs
+and retain used identifiers in bounded replay history, preventing a replayed
+handshake from resetting this high-water mark while that process remains alive.
 
 ## 4. Implicit rejection, and why it shapes the protocol
 
@@ -143,9 +159,11 @@ The consequence: a handshake carrying a tampered ML-KEM ciphertext **completes**
 The responder derives a key, believes it has a session, and nothing signals a
 problem until the first AEAD tag fails. Any protocol treating "decapsulation
 succeeded" as "the peer is authentic" is broken by construction. Our suite never
-does — authentication comes from the ML-DSA signature over the offer, and
-integrity from the AEAD tag over a transcript-bound key. This is pinned by
-`test_tampering_with_the_kem_ciphertext_surfaces_at_the_first_frame`.
+does — authentication comes from both pinned ML-DSA signatures, and record
+integrity from the AEAD tag over a transcript-bound key. Network ciphertext
+mutation fails the gateway signature first. The explicit implicit-rejection test
+re-signs the mutation as the legitimate gateway to isolate ML-KEM behavior, then
+proves the divergent key fails at the first AEAD frame.
 
 ## 5. Validation
 
@@ -163,8 +181,11 @@ wrong in the same way. The ML-KEM backend is therefore cross-checked against
 
 ## 6. Measured cost
 
-300 iterations, arm64, Python 3.13.11, cryptography 50.0.1. Full data in
-[`bench/results/comparison.json`](../bench/results/comparison.json).
+The timing rows below are the original 300-iteration arm64 measurement from
+before mutual gateway authentication and are therefore lower bounds for the
+current handshake. The benchmark harness now measures the added gateway
+ML-DSA sign/verify operations and reports both signature sizes; its checked-in
+historical result is not relabelled as a fresh measurement.
 
 | Operation | Legacy | Modernized | Change |
 |---|---:|---:|---|
@@ -173,7 +194,7 @@ wrong in the same way. The ML-KEM backend is therefore cross-checked against
 | Handshake, initiator | 0.025 ms | 0.770 ms | 31x slower |
 | Handshake, responder | 0.897 ms | 0.278 ms | 3.2x faster |
 | Seal one reading | 0.0017 ms | 0.0017 ms | unchanged |
-| Handshake bytes on the wire | 344 B | ~5.6 kB | 16x larger |
+| Raw handshake cryptographic fields | 256 B | ~9.0 kB | 35x larger |
 
 Three things worth drawing out.
 
@@ -185,14 +206,15 @@ per-session ephemeral keys affordable, and ephemeral keys are what buy forward
 secrecy.
 
 **The cost moved to the initiator.** RSA is cheap to encrypt and expensive to
-decrypt, so the legacy responder carried the load. The hybrid initiator verifies
-a signature, encapsulates, does an X25519 exchange, and runs HKDF — 31x more
-than an RSA public-key operation, though still under a millisecond. For a
-gateway holding long-lived sessions this is irrelevant; for a device opening a
-session per reading it would not be.
+decrypt, so the legacy responder carried the load. The hybrid gateway verifies
+one ML-DSA signature, encapsulates, performs X25519 and HKDF, then creates its
+own ML-DSA signature. The cloud performs the matching signature verification.
+The old 31x initiator figure excludes that new sign operation and must not be
+quoted as a current benchmark.
 
-**Bandwidth is the real trade.** The handshake grows from 344 B to roughly
-5.6 kB, dominated by the 3309-byte ML-DSA signature and the 1184-byte
-encapsulation key. Data frames are unchanged at 119 B because the record layer
-is shared. On a constrained radio link the handshake cost, not the compute,
-would be the thing to engineer around.
+**Bandwidth is the real trade.** Raw cryptographic handshake fields grow from
+256 B to roughly 9.0 kB, dominated by two 3309-byte ML-DSA signatures and the
+1184-byte encapsulation key. JSON/base64 adds further wire overhead. Data frames
+are unchanged at 119 B because the record layer is shared. On a constrained
+radio link the handshake cost, not the compute, would be the thing to engineer
+around.

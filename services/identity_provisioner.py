@@ -1,8 +1,8 @@
-"""Provision the cloud ML-DSA identity and the gateway's public-key pin.
+"""Provision separate ML-DSA identities and peer pins for cloud and gateway.
 
-This runs outside the service network before either endpoint starts. The two
-outputs are placed in separate volumes so the cloud never writes the gateway's
-trust store and the gateway never receives the private seed.
+This runs outside the service network before either endpoint starts. Every
+private seed and public pin has its own volume, so neither long-running service
+receives the peer's private identity or can rewrite its trust anchor.
 """
 
 from __future__ import annotations
@@ -53,8 +53,18 @@ def provision(private_path: Path, public_path: Path) -> None:
 
 def main() -> None:
     provision(
-        env_path("CLOUD_IDENTITY_PATH", "/run/identity-private/cloud_mldsa.key"),
-        env_path("CLOUD_IDENTITY_PUBLIC_KEY_PATH", "/run/identity-public/cloud_mldsa.pub"),
+        env_path("CLOUD_IDENTITY_PATH", "/run/cloud-identity-private/cloud_mldsa.key"),
+        env_path(
+            "CLOUD_IDENTITY_PUBLIC_KEY_PATH",
+            "/run/cloud-identity-public/cloud_mldsa.pub",
+        ),
+    )
+    provision(
+        env_path("GATEWAY_IDENTITY_PATH", "/run/gateway-identity-private/gateway_mldsa.key"),
+        env_path(
+            "GATEWAY_IDENTITY_PUBLIC_KEY_PATH",
+            "/run/gateway-identity-public/gateway_mldsa.pub",
+        ),
     )
 
 

@@ -18,14 +18,16 @@ from pqcwire.protocol import LEGACY_RSA, PROTOCOL_VERSION
 
 
 def test_data_frame_round_trips_through_json():
-    frame = DataFrame(suite=LEGACY_RSA, session_id="a1b2", seq=7, ciphertext=b"\x00\xffdata")
+    frame = DataFrame(
+        suite=LEGACY_RSA, session_id="a1b2c3d4e5f60718", seq=7, ciphertext=b"\x00\xffdata"
+    )
     restored = DataFrame.from_dict(loads(dumps(frame)))
     assert restored == frame
 
 
 def test_handshake_round_trips_through_json():
     request = HandshakeRequest(
-        suite=LEGACY_RSA, session_id="a1b2", kem_payload={"rsa_ct": b64e(b"ct")}
+        suite=LEGACY_RSA, session_id="a1b2c3d4e5f60718", kem_payload={"rsa_ct": b64e(b"ct")}
     )
     assert HandshakeRequest.from_dict(loads(dumps(request))) == request
 
@@ -78,8 +80,65 @@ def test_canonical_encoding_is_reversible(fields):
     assert decoded == fields
 
 
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        "",
+        "0" * 15,
+        "0" * 17,
+        "é" * 16,
+        "ABCDEF0123456789",
+        "0123456789abcdeg",
+    ],
+    ids=["empty", "short", "oversized", "non-ascii", "uppercase", "non-hex"],
+)
+def test_decoding_rejects_noncanonical_session_identifiers(session_id):
+    handshake = HandshakeRequest(
+        suite=LEGACY_RSA,
+        session_id=session_id,
+        kem_payload={"rsa_ct": b64e(b"ct")},
+    ).to_dict()
+    frame = DataFrame(
+        suite=LEGACY_RSA,
+        session_id=session_id,
+        seq=0,
+        ciphertext=b"ct",
+    ).to_dict()
+
+    with pytest.raises(FrameError, match="16 lowercase hexadecimal"):
+        HandshakeRequest.from_dict(handshake)
+    with pytest.raises(FrameError, match="16 lowercase hexadecimal"):
+        DataFrame.from_dict(frame)
+
+
+@pytest.mark.parametrize("session_id", ["0" * 16, "0123456789abcdef", "f" * 16])
+def test_decoding_accepts_canonical_session_identifier_boundaries(session_id):
+    request = HandshakeRequest(
+        suite=LEGACY_RSA,
+        session_id=session_id,
+        kem_payload={"rsa_ct": b64e(b"ct")},
+    )
+    assert HandshakeRequest.from_dict(request.to_dict()).session_id == session_id
+
+
+def test_decoding_rejects_unsupported_protocol_versions_before_use():
+    handshake = HandshakeRequest(
+        suite=LEGACY_RSA, session_id="0123456789abcdef", kem_payload={"rsa_ct": b64e(b"ct")}
+    ).to_dict()
+    frame = DataFrame(
+        suite=LEGACY_RSA, session_id="0123456789abcdef", seq=0, ciphertext=b"ct"
+    ).to_dict()
+
+    with pytest.raises(FrameError, match="unsupported protocol version"):
+        HandshakeRequest.from_dict({**handshake, "v": PROTOCOL_VERSION + 1})
+    with pytest.raises(FrameError, match="unsupported protocol version"):
+        DataFrame.from_dict({**frame, "v": PROTOCOL_VERSION + 1})
+
+
 def test_decoding_rejects_malformed_frames():
-    valid = DataFrame(suite=LEGACY_RSA, session_id="a1", seq=0, ciphertext=b"x").to_dict()
+    valid = DataFrame(
+        suite=LEGACY_RSA, session_id="0123456789abcdef", seq=0, ciphertext=b"x"
+    ).to_dict()
 
     with pytest.raises(FrameError):
         DataFrame.from_dict({k: v for k, v in valid.items() if k != "ct"})

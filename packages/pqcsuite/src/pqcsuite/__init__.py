@@ -18,6 +18,7 @@ from pqcsuite.hybrid import (
     HybridClient,
     HybridServer,
     Offer,
+    OfferCapacityError,
     generate_identity_key,
     load_identity_private,
     load_identity_public,
@@ -36,7 +37,12 @@ from pqcsuite.legacy import (
     serialize_private_key,
     serialize_public_key,
 )
-from pqcsuite.record import KEY_LENGTH, AuthenticationError, RecordSession
+from pqcsuite.record import (
+    KEY_LENGTH,
+    AuthenticationError,
+    RecordSession,
+    RecordSessionExhausted,
+)
 
 __all__ = [
     "KEY_LENGTH",
@@ -49,7 +55,9 @@ __all__ = [
     "LegacyClient",
     "LegacyServer",
     "Offer",
+    "OfferCapacityError",
     "RecordSession",
+    "RecordSessionExhausted",
     "generate_identity_key",
     "generate_private_key",
     "load_identity_private",

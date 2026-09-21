@@ -11,7 +11,7 @@ import pytest
 import pqcsuite as cs
 from pqcsuite.record import AuthenticationError
 from pqcwire.frames import DataFrame, FrameError, b64d, b64e
-from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA, PROTOCOL_VERSION
 from pqcwire.sequence import ReplayError
 
 
@@ -26,8 +26,9 @@ def legacy_pair():
 @pytest.fixture
 def hybrid_pair():
     identity = cs.generate_identity_key()
-    server = cs.HybridServer(identity)
-    client = cs.HybridClient(identity.public_key())
+    gateway_identity = cs.generate_identity_key()
+    server = cs.HybridServer(identity, gateway_identity.public_key())
+    client = cs.HybridClient(identity.public_key(), gateway_identity)
     offer = server.make_offer()
     request, client_session = client.open_session(offer)
     return client, server, offer, request, client_session, server.accept(request)
@@ -42,6 +43,29 @@ def _flip(frame: DataFrame, index: int = 0) -> DataFrame:
         seq=frame.seq,
         ciphertext=bytes(corrupted),
     )
+
+
+def test_unsupported_versions_are_rejected_before_cryptographic_use(legacy_pair):
+    _, server, request, client_session, server_session = legacy_pair
+    wrong_request = type(request)(
+        suite=request.suite,
+        session_id=request.session_id,
+        kem_payload=dict(request.kem_payload),
+        version=PROTOCOL_VERSION + 1,
+    )
+    frame = client_session.seal(b"reading")
+    wrong_frame = type(frame)(
+        suite=frame.suite,
+        session_id=frame.session_id,
+        seq=frame.seq,
+        ciphertext=frame.ciphertext,
+        version=PROTOCOL_VERSION + 1,
+    )
+
+    with pytest.raises(FrameError, match="unsupported protocol version"):
+        server.accept(wrong_request)
+    with pytest.raises(FrameError, match="unsupported protocol version"):
+        server_session.open(wrong_frame)
 
 
 def test_modified_ciphertext_is_rejected(legacy_pair):
@@ -151,6 +175,104 @@ def test_substituted_ephemeral_keys_are_rejected(hybrid_pair):
         client.verify_offer(substituted)
 
 
+def test_signed_offer_with_out_of_range_mlkem_coefficient_is_rejected():
+    cloud_identity = cs.generate_identity_key()
+    gateway_identity = cs.generate_identity_key()
+    server = cs.HybridServer(cloud_identity, gateway_identity.public_key())
+    client = cs.HybridClient(cloud_identity.public_key(), gateway_identity)
+    real = server.make_offer()
+    invalid_key = bytearray(real.mlkem_pub)
+    # ML-KEM packs two 12-bit coefficients into three bytes. q=3329 in the
+    # first coefficient is structurally invalid under FIPS 203 section 7.2.
+    invalid_key[0] = 3329 & 0xFF
+    invalid_key[1] = (invalid_key[1] & 0xF0) | ((3329 >> 8) & 0x0F)
+    unsigned = cs.Offer(
+        key_id=real.key_id,
+        mlkem_pub=bytes(invalid_key),
+        x25519_pub=real.x25519_pub,
+        signature=b"",
+    )
+    signed = cs.Offer(
+        key_id=unsigned.key_id,
+        mlkem_pub=unsigned.mlkem_pub,
+        x25519_pub=unsigned.x25519_pub,
+        signature=cloud_identity.sign(unsigned.signed_bytes()),
+    )
+
+    with pytest.raises(ValueError):
+        client.open_session(signed)
+
+
+def test_offer_signature_binds_protocol_version_and_suite(hybrid_pair):
+    client, _, offer, *_ = hybrid_pair
+    changed_version = cs.Offer(
+        key_id=offer.key_id,
+        mlkem_pub=offer.mlkem_pub,
+        x25519_pub=offer.x25519_pub,
+        signature=offer.signature,
+        version=offer.version + 1,
+        suite=offer.suite,
+    )
+    changed_suite = cs.Offer(
+        key_id=offer.key_id,
+        mlkem_pub=offer.mlkem_pub,
+        x25519_pub=offer.x25519_pub,
+        signature=offer.signature,
+        version=offer.version,
+        suite=LEGACY_RSA,
+    )
+
+    with pytest.raises(FrameError, match="protocol version"):
+        client.verify_offer(changed_version)
+    with pytest.raises(FrameError, match="offer suite"):
+        client.verify_offer(changed_suite)
+    assert changed_version.signed_bytes() != offer.signed_bytes()
+    assert changed_suite.signed_bytes() != offer.signed_bytes()
+
+
+def test_gateway_signature_binds_the_full_hybrid_request(hybrid_pair):
+    client, server, *_ = hybrid_pair
+    offer = server.make_offer()
+    request, _ = client.open_session(offer)
+    changed = type(request)(
+        suite=request.suite,
+        session_id="different-session",
+        kem_payload=dict(request.kem_payload),
+    )
+
+    with pytest.raises(FrameError, match="gateway handshake signature"):
+        server.accept(changed)
+    # Unauthenticated garbage does not consume the bounded offer.
+    server.accept(request)
+
+
+def test_gateway_signature_rejects_kem_ciphertext_mutation(hybrid_pair):
+    client, server, *_ = hybrid_pair
+    offer = server.make_offer()
+    request, _ = client.open_session(offer)
+    ciphertext = bytearray(b64d(request.kem_payload["mlkem_ct"]))
+    ciphertext[0] ^= 1
+    changed = type(request)(
+        suite=request.suite,
+        session_id=request.session_id,
+        kem_payload={**request.kem_payload, "mlkem_ct": b64e(bytes(ciphertext))},
+    )
+
+    with pytest.raises(FrameError, match="gateway handshake signature"):
+        server.accept(changed)
+    server.accept(request)
+
+
+def test_unpinned_gateway_identity_is_rejected(hybrid_pair):
+    _, server, *_ = hybrid_pair
+    attacker = cs.HybridClient(server.identity_public_key, cs.generate_identity_key())
+    offer = server.make_offer()
+    request, _ = attacker.open_session(offer)
+
+    with pytest.raises(FrameError, match="gateway handshake signature"):
+        server.accept(request)
+
+
 def test_an_offer_cannot_be_used_twice(hybrid_pair):
     _, server, _, request, *_ = hybrid_pair
     with pytest.raises(FrameError, match="unknown, expired, or already used"):
@@ -177,6 +299,9 @@ def test_tampering_with_the_kem_ciphertext_surfaces_at_the_first_frame(hybrid_pa
         session_id=request.session_id,
         kem_payload={**request.kem_payload, "mlkem_ct": b64e(bytes(corrupted_ct))},
     )
+    # A network attacker cannot update this signature. Re-sign as the legitimate
+    # gateway to isolate ML-KEM's implicit-rejection behavior itself.
+    tampered = client.authenticate_request(tampered, offer)
 
     # The handshake completes rather than raising -- that is the point.
     victim_session = server.accept(tampered)
