@@ -1,0 +1,39 @@
+# Modern node image, shared by the gateway and the cloud.
+#
+# Unlike the device this image tracks a current cryptography release, which is
+# where ML-KEM-768 and ML-DSA-65 come from. The wheel statically bundles its
+# own OpenSSL, so the host provides nothing and the image runs unchanged on
+# both amd64 and arm64.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+        "cryptography>=48" \
+        "fastapi>=0.115" \
+        "uvicorn[standard]>=0.32" \
+        "httpx>=0.28" \
+        "prometheus-client>=0.21"
+
+COPY packages/wire /app/packages/wire
+COPY packages/nodekit /app/packages/nodekit
+COPY packages/cryptosuite /app/packages/cryptosuite
+RUN pip install --no-cache-dir --no-deps \
+        ./packages/wire ./packages/nodekit ./packages/cryptosuite
+
+COPY services /app/services
+
+# The state directory must exist and be owned by the runtime user before a
+# named volume is mounted over it: Docker seeds a fresh volume with the
+# image's ownership, and a root-owned mount point leaves the service unable
+# to open its own database.
+RUN useradd --create-home --uid 10002 node \
+ && mkdir -p /var/lib/node \
+ && chown node:node /var/lib/node
+USER node
+
+CMD ["python", "-m", "services.cloud"]

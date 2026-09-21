@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "wire",
+    "cryptosuite",
+    "nodekit",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +38,8 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 wire = { workspace = true }
+cryptosuite = { workspace = true }
+nodekit = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -45,9 +49,11 @@ target-version = "py39"
 select = ["E", "F", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
 ignore = ["S101"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["wire", "cryptosuite", "nodekit", "services"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "B"]
-"packages/wire/**" = ["UP006", "UP035", "UP045"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping
+from typing import Any
 
 from wire.protocol import PROTOCOL_VERSION
 
@@ -55,7 +56,7 @@ _lp = lp
 
 def nonce_for_seq(seq: int) -> bytes:
     if not 0 <= seq <= MAX_SEQ:
-        raise FrameError("sequence number {} outside the safe nonce range".format(seq))
+        raise FrameError(f"sequence number {seq} outside the safe nonce range")
     return seq.to_bytes(NONCE_LENGTH, "big")
 
 
@@ -79,10 +80,10 @@ def data_aad(version: int, suite: str, session_id: str, seq: int) -> bytes:
 
 def _require(mapping: Mapping[str, Any], key: str, kind: type) -> Any:
     if key not in mapping:
-        raise FrameError("frame is missing required field {!r}".format(key))
+        raise FrameError(f"frame is missing required field {key!r}")
     value = mapping[key]
-    if not isinstance(value, kind) or isinstance(value, bool) and kind is int:
-        raise FrameError("field {!r} has wrong type".format(key))
+    if not isinstance(value, kind) or (isinstance(value, bool) and kind is int):
+        raise FrameError(f"field {key!r} has wrong type")
     return value
 
 
@@ -97,10 +98,10 @@ class HandshakeRequest:
 
     suite: str
     session_id: str
-    kem_payload: Dict[str, str]
+    kem_payload: dict[str, str]
     version: int = PROTOCOL_VERSION
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "v": self.version,
             "suite": self.suite,
@@ -138,7 +139,7 @@ class DataFrame:
     def nonce(self) -> bytes:
         return nonce_for_seq(self.seq)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "v": self.version,
             "suite": self.suite,
@@ -151,7 +152,7 @@ class DataFrame:
     def from_dict(cls, raw: Mapping[str, Any]) -> DataFrame:
         seq = _require(raw, "seq", int)
         if not 0 <= seq <= MAX_SEQ:
-            raise FrameError("sequence number {} outside the safe nonce range".format(seq))
+            raise FrameError(f"sequence number {seq} outside the safe nonce range")
         return cls(
             version=_require(raw, "v", int),
             suite=_require(raw, "suite", str),
@@ -165,7 +166,7 @@ def dumps(frame: Any) -> str:
     return json.dumps(frame.to_dict(), separators=(",", ":"), sort_keys=True)
 
 
-def loads(text: str) -> Dict[str, Any]:
+def loads(text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except ValueError as exc:

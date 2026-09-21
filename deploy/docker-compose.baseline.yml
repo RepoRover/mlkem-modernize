@@ -1,0 +1,88 @@
+# v0 baseline: every link uses the legacy RSA suite.
+#
+# This is the system before modernization. Both hops are quantum-vulnerable,
+# which is what makes the harvest-now-decrypt-later demonstration work and
+# what the migration is measured against.
+
+name: mlkem-baseline
+
+services:
+  cloud:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.service
+    command: ["python", "-m", "services.cloud"]
+    environment:
+      PORT: "8000"
+      CLOUD_DB_PATH: /var/lib/node/readings.db
+      CLOUD_KEY_PATH: /var/lib/node/cloud_rsa.pem
+      LOG_LEVEL: INFO
+    volumes:
+      - cloud-state:/var/lib/node
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.service
+    command: ["python", "-m", "services.gateway"]
+    environment:
+      PORT: "8080"
+      CLOUD_URL: http://cloud:8000
+      GATEWAY_KEY_PATH: /var/lib/node/gateway_rsa.pem
+      LOG_LEVEL: INFO
+    volumes:
+      - gateway-state:/var/lib/node
+    ports:
+      - "8080:8080"
+    depends_on:
+      cloud:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  legacy-device:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.device
+    environment:
+      GATEWAY_URL: http://gateway:8080
+      DEVICE_ID: weather-station-01
+      DATASET_PATH: /data/weather_data.csv
+      SEND_INTERVAL_SECONDS: "1.0"
+      MAX_READINGS: "0"
+      LOG_LEVEL: INFO
+    volumes:
+      - ../data:/data:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+    # Hardware limits. These are what make "the device cannot do ML-KEM" a
+    # property of the deployment rather than a claim in a comment.
+    mem_limit: 48m
+    memswap_limit: 48m
+    cpus: 0.1
+    pids_limit: 32
+    read_only: true
+    tmpfs:
+      - /tmp:size=4m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  cloud-state:
+  gateway-state:

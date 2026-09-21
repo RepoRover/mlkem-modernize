@@ -10,12 +10,11 @@ from wire.frames import (
     b64e,
     canonical,
     data_aad,
-    lp,
     dumps,
     loads,
+    lp,
     nonce_for_seq,
 )
-from wire.sequence import ReplayError, SequenceCounter, SequenceGuard
 from wire.protocol import (
     HYBRID_PQC,
     LEGACY_RSA,
@@ -25,6 +24,7 @@ from wire.protocol import (
     UnknownSuiteError,
     suite_spec,
 )
+from wire.sequence import ReplayError, SequenceCounter, SequenceGuard
 from wire.telemetry import (
     DatasetError,
     StationMetadata,
@@ -39,14 +39,14 @@ __all__ = [
     "MAX_SEQ",
     "NONCE_LENGTH",
     "PROTOCOL_VERSION",
-    "ReplayError",
-    "SequenceCounter",
-    "SequenceGuard",
     "SUITES",
     "DataFrame",
     "DatasetError",
     "FrameError",
     "HandshakeRequest",
+    "ReplayError",
+    "SequenceCounter",
+    "SequenceGuard",
     "StationMetadata",
     "SuiteSpec",
     "UnknownSuiteError",
@@ -56,10 +56,10 @@ __all__ = [
     "b64e",
     "canonical",
     "data_aad",
-    "lp",
     "dumps",
     "load_dataset",
     "loads",
+    "lp",
     "nonce_for_seq",
     "suite_spec",
 ]

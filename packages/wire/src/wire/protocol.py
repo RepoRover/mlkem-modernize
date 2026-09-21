@@ -8,7 +8,6 @@ quantum-vulnerable suite, and the cloud can refuse those frames by policy.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
 
 PROTOCOL_VERSION = 1
 
@@ -26,7 +25,7 @@ class SuiteSpec:
     summary: str
 
 
-SUITES: Dict[str, SuiteSpec] = {
+SUITES: dict[str, SuiteSpec] = {
     LEGACY_RSA: SuiteSpec(
         suite_id=LEGACY_RSA,
         quantum_resistant=False,
@@ -61,5 +60,5 @@ def suite_spec(suite_id: str) -> SuiteSpec:
 
 class UnknownSuiteError(ValueError):
     def __init__(self, suite_id: str) -> None:
-        super().__init__("unknown cipher suite: {!r}".format(suite_id))
+        super().__init__(f"unknown cipher suite: {suite_id!r}")
         self.suite_id = suite_id

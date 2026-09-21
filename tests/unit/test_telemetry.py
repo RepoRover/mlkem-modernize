@@ -23,9 +23,7 @@ def test_reading_json_is_deterministic():
 
 
 def test_missing_values_become_none():
-    reading = WeatherReading.from_dict(
-        {"date": "2024-01-01", "temp_max_c": "", "temp_min_c": None}
-    )
+    reading = WeatherReading.from_dict({"date": "2024-01-01", "temp_max_c": "", "temp_min_c": None})
     assert reading.temp_max_c is None
     assert reading.windspeed_max_kmh is None
 

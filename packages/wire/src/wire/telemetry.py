@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any
 
 _COLUMN_ALIASES = {
     "time": "date",
@@ -34,26 +35,26 @@ class StationMetadata:
     elevation: float
     timezone: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 @dataclass(frozen=True)
 class WeatherReading:
     date: str
-    temp_max_c: Optional[float]
-    temp_min_c: Optional[float]
-    precipitation_mm: Optional[float]
-    windspeed_max_kmh: Optional[float]
+    temp_max_c: float | None
+    temp_min_c: float | None
+    precipitation_mm: float | None
+    windspeed_max_kmh: float | None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), separators=(",", ":"), sort_keys=True)
 
     @classmethod
-    def from_dict(cls, raw: Dict[str, Any]) -> WeatherReading:
+    def from_dict(cls, raw: dict[str, Any]) -> WeatherReading:
         try:
             return cls(
                 date=str(raw["date"]),
@@ -63,13 +64,13 @@ class WeatherReading:
                 windspeed_max_kmh=_opt_float(raw.get("windspeed_max_kmh")),
             )
         except KeyError as exc:
-            raise DatasetError("reading is missing field {}".format(exc)) from None
+            raise DatasetError(f"reading is missing field {exc}") from None
 
 
 @dataclass(frozen=True)
 class WeatherDataset:
     station: StationMetadata
-    readings: List[WeatherReading]
+    readings: list[WeatherReading]
 
     def __len__(self) -> int:
         return len(self.readings)
@@ -78,13 +79,13 @@ class WeatherDataset:
         return iter(self.readings)
 
 
-def _opt_float(value: Any) -> Optional[float]:
+def _opt_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
     try:
         return float(value)
     except (TypeError, ValueError):
-        raise DatasetError("expected a number, got {!r}".format(value)) from None
+        raise DatasetError(f"expected a number, got {value!r}") from None
 
 
 def _normalise(column: str) -> str:
@@ -92,14 +93,14 @@ def _normalise(column: str) -> str:
     return _COLUMN_ALIASES.get(base, base)
 
 
-def _find_header(rows: Sequence[List[str]]) -> int:
+def _find_header(rows: Sequence[list[str]]) -> int:
     for index, row in enumerate(rows):
         if row and row[0].strip() == "time":
             return index
     raise DatasetError("no 'time' header row found; is this an Open-Meteo CSV export?")
 
 
-def _parse_station(rows: Sequence[List[str]], header_index: int) -> StationMetadata:
+def _parse_station(rows: Sequence[list[str]], header_index: int) -> StationMetadata:
     if header_index < 2:
         raise DatasetError("station preamble is missing")
     keys = [cell.strip() for cell in rows[0]]
@@ -113,18 +114,18 @@ def _parse_station(rows: Sequence[List[str]], header_index: int) -> StationMetad
             timezone=fields.get("timezone", "UTC"),
         )
     except (KeyError, ValueError) as exc:
-        raise DatasetError("malformed station preamble: {}".format(exc)) from None
+        raise DatasetError(f"malformed station preamble: {exc}") from None
 
 
 def load_dataset(path: Path) -> WeatherDataset:
     with Path(path).open(newline="", encoding="utf-8") as handle:
-        rows = [row for row in csv.reader(handle)]
+        rows = list(csv.reader(handle))
 
     header_index = _find_header(rows)
     station = _parse_station(rows, header_index)
     columns = [_normalise(cell) for cell in rows[header_index]]
 
-    readings: List[WeatherReading] = []
+    readings: list[WeatherReading] = []
     for row in rows[header_index + 1 :]:
         if not row or not row[0].strip():
             continue

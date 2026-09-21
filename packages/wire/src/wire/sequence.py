@@ -31,10 +31,10 @@ class SequenceGuard:
         """Check a sequence number without advancing the high-water mark."""
         if seq <= self._highest:
             raise ReplayError(
-                "frame seq {} replays or regresses high-water mark {}".format(seq, self._highest)
+                f"frame seq {seq} replays or regresses high-water mark {self._highest}"
             )
         if seq > MAX_SEQ:
-            raise FrameError("sequence number {} outside the safe nonce range".format(seq))
+            raise FrameError(f"sequence number {seq} outside the safe nonce range")
 
     def commit(self, seq: int) -> None:
         """Advance the high-water mark once the frame has been authenticated.

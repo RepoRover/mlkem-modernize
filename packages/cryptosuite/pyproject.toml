@@ -1,0 +1,16 @@
+[project]
+name = "cryptosuite"
+version = "0.1.0"
+description = "Key establishment and AEAD record layer for both the legacy and post-quantum suites"
+# py3.9 so the frozen-firmware device can install this package too. The hybrid
+# suite degrades to unavailable when the installed cryptography predates
+# ML-KEM support, which is exactly the constraint the device operates under.
+requires-python = ">=3.9"
+dependencies = ["cryptography>=3.4"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cryptosuite"]

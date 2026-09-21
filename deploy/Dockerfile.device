@@ -1,0 +1,32 @@
+# Simulated legacy weather station.
+#
+# Python 3.9 reached end of life in October 2025 and cryptography 3.4.8 dates
+# from August 2021. The combination is deliberate: it is what fielded firmware
+# actually looks like several years after deployment, and it predates ML-KEM
+# by three years. The device therefore cannot negotiate a post-quantum suite
+# no matter how much CPU it is given -- the primitive simply is not there.
+FROM python:3.9-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Pinned first and installed with --no-deps below, so that installing our own
+# packages can never silently pull a newer, PQC-capable build.
+RUN pip install --no-cache-dir "cryptography==3.4.8"
+
+COPY packages/wire /app/packages/wire
+COPY packages/nodekit /app/packages/nodekit
+COPY packages/cryptosuite /app/packages/cryptosuite
+RUN pip install --no-cache-dir --no-deps \
+        ./packages/wire ./packages/nodekit ./packages/cryptosuite
+
+COPY services/__init__.py /app/services/__init__.py
+COPY services/legacy_device /app/services/legacy_device
+
+RUN useradd --create-home --uid 10001 device
+USER device
+
+CMD ["python", "-m", "services.legacy_device"]
