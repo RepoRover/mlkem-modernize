@@ -15,7 +15,7 @@ from typing import Any
 
 import cryptography
 
-from wire.protocol import LEGACY_RSA
+from wire.protocol import HYBRID_PQC, LEGACY_RSA
 
 try:
     from cryptography.hazmat.primitives.asymmetric import mlkem as _mlkem
@@ -44,11 +44,14 @@ def mlkem_module() -> Any:
 def supported_suites() -> list[str]:
     """Suites this node can actually run.
 
-    Distinct from :data:`MLKEM_AVAILABLE`, which only reports what the crypto
-    backend offers. At this baseline no post-quantum suite is implemented, so
-    a capable backend still buys nothing.
+    Distinct from :data:`MLKEM_AVAILABLE`, which reports only what the crypto
+    backend offers. Both conditions must hold: the hybrid suite is implemented,
+    but a node whose backend predates ML-KEM still cannot run it.
     """
-    return [LEGACY_RSA]
+    suites = [LEGACY_RSA]
+    if MLKEM_AVAILABLE:
+        suites.append(HYBRID_PQC)
+    return suites
 
 
 @dataclass(frozen=True)

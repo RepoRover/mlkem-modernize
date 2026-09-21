@@ -1,16 +1,21 @@
-# v0 baseline: every link uses the legacy RSA suite.
-#
-# This is the system before modernization. Both hops are quantum-vulnerable,
-# which is what makes the harvest-now-decrypt-later demonstration work and what
-# the migration is measured against.
+# Modernized deployment: the cloud-facing link is post-quantum.
 #
 #   legacy-device --> tap-edge --> gateway --> tap-backbone --> cloud
+#     LEGACY-RSA2048-OAEP-AESGCM  |  MLKEM768-X25519-HKDF-AESGCM
 #
-# Run the attack afterwards with:
-#   docker compose -f deploy/docker-compose.baseline.yml --profile attack \
+# The device is unchanged and still speaks the only suite it has. The gateway
+# terminates that session and opens a separate post-quantum one to the cloud,
+# which is the whole point of brokering: the fleet migrates without the fielded
+# hardware being touched.
+#
+# The cloud additionally refuses the legacy suite outright, modelling the end
+# state of a migration where no quantum-vulnerable traffic is accepted.
+#
+# Run the same attack against this stack and compare with the baseline:
+#   docker compose -f deploy/docker-compose.yml --profile attack \
 #       run --rm harvester
 
-name: mlkem-baseline
+name: mlkem-modern
 
 x-node: &node
   build:
@@ -34,6 +39,9 @@ services:
       PORT: "8000"
       CLOUD_DB_PATH: /var/lib/node/readings.db
       CLOUD_KEY_PATH: /var/lib/node/cloud_rsa.pem
+      CLOUD_IDENTITY_PATH: /var/lib/node/cloud_mldsa.key
+      # Migration complete: quantum-vulnerable traffic is no longer accepted.
+      ALLOW_LEGACY_SUITE: "false"
     volumes:
       - cloud-state:/var/lib/node
     networks: [backbone]
@@ -70,9 +78,7 @@ services:
       # link is observed exactly as the device-to-gateway link is.
       CLOUD_URL: http://tap-backbone:9000
       GATEWAY_KEY_PATH: /var/lib/node/gateway_rsa.pem
-      # Pinned rather than left on auto: this file must keep reproducing the
-      # pre-migration system even though both ends now support the PQC suite.
-      UPSTREAM_SUITE: legacy
+      UPSTREAM_SUITE: hybrid
     volumes:
       - gateway-state:/var/lib/node
     # The gateway straddles both segments. That position is what lets it

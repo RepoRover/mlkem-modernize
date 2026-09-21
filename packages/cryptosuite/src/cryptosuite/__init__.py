@@ -1,8 +1,9 @@
 """Key establishment and record protection for both cipher suites.
 
-Only the legacy suite exists at this baseline. :mod:`cryptosuite.capabilities`
-already reports whether the installed crypto backend could support ML-KEM,
-which is what the migration will build on.
+Importing this package never requires ML-KEM. The hybrid suite raises
+:class:`CapabilityError` only when it is actually used, so a node with a
+pre-quantum crypto backend can still import the code, report its capabilities,
+and speak the legacy suite.
 """
 
 from cryptosuite.capabilities import (
@@ -13,7 +14,17 @@ from cryptosuite.capabilities import (
     probe,
     supported_suites,
 )
-from cryptosuite.keystore import load_or_create_rsa
+from cryptosuite.hybrid import (
+    HybridClient,
+    HybridServer,
+    Offer,
+    generate_identity_key,
+    load_identity_private,
+    load_identity_public,
+    serialize_identity_private,
+    serialize_identity_public,
+)
+from cryptosuite.keystore import load_or_create_identity, load_or_create_rsa
 from cryptosuite.legacy import (
     LegacyClient,
     LegacyServer,
@@ -33,10 +44,17 @@ __all__ = [
     "AuthenticationError",
     "CapabilityError",
     "CapabilityReport",
+    "HybridClient",
+    "HybridServer",
     "LegacyClient",
     "LegacyServer",
+    "Offer",
     "RecordSession",
+    "generate_identity_key",
     "generate_private_key",
+    "load_identity_private",
+    "load_identity_public",
+    "load_or_create_identity",
     "load_or_create_rsa",
     "load_private_key",
     "load_public_key",
@@ -44,6 +62,8 @@ __all__ = [
     "new_session_id",
     "probe",
     "recover_session_key",
+    "serialize_identity_private",
+    "serialize_identity_public",
     "serialize_private_key",
     "serialize_public_key",
     "supported_suites",

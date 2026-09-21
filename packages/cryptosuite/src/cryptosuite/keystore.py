@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from cryptosuite.hybrid import (
+    generate_identity_key,
+    load_identity_private,
+    serialize_identity_private,
+)
 from cryptosuite.legacy import (
     generate_private_key,
     load_private_key,
@@ -39,4 +45,18 @@ def load_or_create_rsa(path: Path) -> rsa.RSAPrivateKey:
         return load_private_key(path.read_bytes())
     key = generate_private_key()
     _write_private(path, serialize_private_key(key))
+    return key
+
+
+def load_or_create_identity(path: Path) -> Any:
+    """Load or create the responder's long-term ML-DSA-65 signing key.
+
+    Stored as the 32-byte seed rather than an expanded key: the seed is the
+    canonical form in FIPS 204 and regenerates the key deterministically.
+    """
+    path = Path(path)
+    if path.exists():
+        return load_identity_private(path.read_bytes())
+    key = generate_identity_key()
+    _write_private(path, serialize_identity_private(key))
     return key

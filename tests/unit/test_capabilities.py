@@ -13,14 +13,17 @@ def test_probe_describes_the_installed_backend():
     assert report.mlkem_available is (report.reason is None)
 
 
-def test_backend_capability_is_not_the_same_as_an_implemented_suite():
-    """A capable crypto backend does not by itself mean a suite is supported.
+def test_supported_suites_require_both_an_implementation_and_a_backend():
+    """A node advertises the hybrid suite only when it could actually run it.
 
-    Conflating the two is how a node ends up advertising a suite it cannot
-    actually complete a handshake with.
+    Both conditions have to hold. Advertising on backend capability alone is
+    how a node ends up offering a suite it cannot complete a handshake with;
+    advertising on implementation alone is how the legacy device would claim
+    post-quantum support it does not have.
     """
-    assert LEGACY_RSA in cs.supported_suites()
-    assert HYBRID_PQC not in cs.supported_suites()
+    suites = cs.supported_suites()
+    assert LEGACY_RSA in suites
+    assert (HYBRID_PQC in suites) is cs.MLKEM_AVAILABLE
 
 
 def test_requesting_mlkem_without_support_fails_loudly(monkeypatch):

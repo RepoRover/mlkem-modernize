@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import cryptosuite as cs
 from bench.harness import DEFAULT_ITERATIONS, SuiteBenchmark, Timing
-from wire.protocol import LEGACY_RSA, suite_spec
+from wire.frames import b64d
+from wire.protocol import HYBRID_PQC, LEGACY_RSA, suite_spec
 from wire.telemetry import WeatherReading
 
 SAMPLE_READING = WeatherReading("2024-01-01", 7.4, 3.4, 1.8, 19.7)
@@ -62,3 +63,68 @@ def benchmark_legacy(iterations: int = DEFAULT_ITERATIONS) -> SuiteBenchmark:
     )
     _ = server_session  # established above to prove the pair interoperates
     return benchmark
+
+
+def benchmark_hybrid(iterations: int = DEFAULT_ITERATIONS) -> SuiteBenchmark:
+    """Measure the post-quantum suite the same way the legacy one is measured."""
+    identity = cs.generate_identity_key()
+    server = cs.HybridServer(identity)
+    client = cs.HybridClient(identity.public_key())
+
+    # One offer, reused for client-side measurements. The server consumes an
+    # offer on accept, so those need a pre-built pool instead.
+    offer = server.make_offer()
+    request, client_session = client.open_session(offer)
+
+    pool_size = max(iterations // 4, 10)
+    pool = []
+    for _ in range(pool_size + 1):
+        pooled_offer = server.make_offer()
+        pooled_request, _ = client.open_session(pooled_offer)
+        pool.append(pooled_request)
+    pending = iter(pool)
+
+    def accept_one() -> None:
+        server.accept(next(pending))
+
+    sealed = client_session.seal(SAMPLE_PAYLOAD)
+    mlkem = cs.mlkem_module()
+
+    return SuiteBenchmark(
+        suite=HYBRID_PQC,
+        quantum_resistant=suite_spec(HYBRID_PQC).quantum_resistant,
+        timings=[
+            Timing.measure(
+                "keygen (ML-KEM-768)",
+                mlkem.MLKEM768PrivateKey.generate,
+                max(iterations // 20, 5),
+            ),
+            Timing.measure("offer: keygen + ML-DSA sign", server.make_offer, iterations),
+            Timing.measure(
+                "handshake: client",
+                lambda: client.open_session(offer),
+                iterations,
+            ),
+            Timing.measure("handshake: server", accept_one, pool_size),
+            Timing.measure(
+                "seal one reading",
+                lambda: client_session.seal(SAMPLE_PAYLOAD),
+                iterations,
+            ),
+        ],
+        sizes_bytes={
+            "plaintext_reading": len(SAMPLE_PAYLOAD),
+            "mlkem_public_key": len(offer.mlkem_pub),
+            "mlkem_ciphertext": len(b64d(request.kem_payload["mlkem_ct"])),
+            "x25519_public_key": len(offer.x25519_pub),
+            "mldsa_signature": len(offer.signature),
+            "data_frame_ciphertext": len(sealed.ciphertext),
+            "aead_overhead": len(sealed.ciphertext) - len(SAMPLE_PAYLOAD),
+        },
+        notes={
+            "forward_secrecy": True,
+            "key_derivation": "HKDF-SHA256 over ss_pq || ss_ec, salted with the transcript hash",
+            "transcript_binding": True,
+            "authentication": "ML-DSA-65 signature over the ephemeral offer",
+        },
+    )

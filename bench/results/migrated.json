@@ -1,0 +1,141 @@
+{
+  "captured_at": "2026-09-21T04:09:41+0300",
+  "environment": {
+    "cryptography_version": "50.0.1",
+    "machine": "arm64",
+    "processor": "arm",
+    "python_version": "3.13.11",
+    "system": "Darwin"
+  },
+  "label": "migrated",
+  "suites": [
+    {
+      "notes": {
+        "forward_secrecy": false,
+        "key_derivation": "none: the transported secret is used directly as the AES key",
+        "transcript_binding": false
+      },
+      "quantum_resistant": false,
+      "sizes_bytes": {
+        "aead_overhead": 16,
+        "data_frame_ciphertext": 119,
+        "handshake_kem_payload": 344,
+        "plaintext_reading": 103
+      },
+      "suite": "LEGACY-RSA2048-OAEP-AESGCM",
+      "timings": [
+        {
+          "max_ms": 118.8256,
+          "mean_ms": 69.2627,
+          "median_ms": 65.9999,
+          "min_ms": 21.0668,
+          "operation": "keygen (RSA-2048)",
+          "p95_ms": 118.8256,
+          "samples": 10
+        },
+        {
+          "max_ms": 0.0375,
+          "mean_ms": 0.0252,
+          "median_ms": 0.0247,
+          "min_ms": 0.0237,
+          "operation": "handshake: client",
+          "p95_ms": 0.0277,
+          "samples": 200
+        },
+        {
+          "max_ms": 1.98,
+          "mean_ms": 0.9304,
+          "median_ms": 0.897,
+          "min_ms": 0.8473,
+          "operation": "handshake: server",
+          "p95_ms": 0.9925,
+          "samples": 200
+        },
+        {
+          "max_ms": 0.0041,
+          "mean_ms": 0.0018,
+          "median_ms": 0.0018,
+          "min_ms": 0.0016,
+          "operation": "seal one reading",
+          "p95_ms": 0.002,
+          "samples": 200
+        },
+        {
+          "max_ms": 1.9519,
+          "mean_ms": 0.9618,
+          "median_ms": 0.9381,
+          "min_ms": 0.8904,
+          "operation": "handshake + seal + open",
+          "p95_ms": 1.0354,
+          "samples": 50
+        }
+      ]
+    },
+    {
+      "notes": {
+        "authentication": "ML-DSA-65 signature over the ephemeral offer",
+        "forward_secrecy": true,
+        "key_derivation": "HKDF-SHA256 over ss_pq || ss_ec, salted with the transcript hash",
+        "transcript_binding": true
+      },
+      "quantum_resistant": true,
+      "sizes_bytes": {
+        "aead_overhead": 16,
+        "data_frame_ciphertext": 119,
+        "mldsa_signature": 3309,
+        "mlkem_ciphertext": 1088,
+        "mlkem_public_key": 1184,
+        "plaintext_reading": 103,
+        "x25519_public_key": 32
+      },
+      "suite": "MLKEM768-X25519-HKDF-AESGCM",
+      "timings": [
+        {
+          "max_ms": 0.2837,
+          "mean_ms": 0.2612,
+          "median_ms": 0.2569,
+          "min_ms": 0.255,
+          "operation": "keygen (ML-KEM-768)",
+          "p95_ms": 0.2837,
+          "samples": 10
+        },
+        {
+          "max_ms": 12.3622,
+          "mean_ms": 3.3892,
+          "median_ms": 2.4468,
+          "min_ms": 1.327,
+          "operation": "offer: keygen + ML-DSA sign",
+          "p95_ms": 8.4624,
+          "samples": 200
+        },
+        {
+          "max_ms": 0.9249,
+          "mean_ms": 0.779,
+          "median_ms": 0.7641,
+          "min_ms": 0.7523,
+          "operation": "handshake: client",
+          "p95_ms": 0.8744,
+          "samples": 200
+        },
+        {
+          "max_ms": 0.3605,
+          "mean_ms": 0.284,
+          "median_ms": 0.2791,
+          "min_ms": 0.2754,
+          "operation": "handshake: server",
+          "p95_ms": 0.3229,
+          "samples": 50
+        },
+        {
+          "max_ms": 0.0033,
+          "mean_ms": 0.0017,
+          "median_ms": 0.0017,
+          "min_ms": 0.0016,
+          "operation": "seal one reading",
+          "p95_ms": 0.0018,
+          "samples": 200
+        }
+      ]
+    }
+  ]
+}

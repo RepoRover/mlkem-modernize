@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 import cryptosuite as cs
 import nodekit
 from nodekit.config import env_float, env_int, env_path, env_str
-from services.gateway.upstream import LegacyUpstream, UpstreamError
+from services.gateway.upstream import UpstreamError, build_upstream
 from wire.frames import DataFrame, FrameError, HandshakeRequest
 
 SERVICE = "gateway"
@@ -27,9 +27,21 @@ app = FastAPI(title="PQC Edge Gateway", version="0.1.0")
 
 _private_key = cs.load_or_create_rsa(env_path("GATEWAY_KEY_PATH", "run/gateway/gateway_rsa.pem"))
 _legacy_server = cs.LegacyServer(_private_key)
-_upstream = LegacyUpstream(
+# UPSTREAM_SUITE is the migration switch: flipping it from legacy to hybrid
+# modernizes the cloud-facing link without the device knowing anything changed.
+_upstream = build_upstream(
     env_str("CLOUD_URL", "http://cloud:8000"),
+    env_str("UPSTREAM_SUITE", "auto"),
     timeout=env_float("UPSTREAM_TIMEOUT_SECONDS", 5.0),
+)
+
+log.info(
+    "gateway started",
+    extra={
+        "downstream_suite": _legacy_server.suite,
+        "upstream_suite": _upstream.suite,
+        "supported_suites": cs.supported_suites(),
+    },
 )
 
 # Maps a device session to the independent upstream session that relays it.
@@ -54,6 +66,7 @@ def capabilities() -> dict[str, Any]:
     report = cs.probe().to_dict()
     report["downstream_suite"] = _legacy_server.suite
     report["upstream_suite"] = _upstream.suite
+    report["brokering"] = _legacy_server.suite != _upstream.suite
     return report
 
 
