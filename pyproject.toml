@@ -70,3 +70,15 @@ markers = [
     "integration: requires the docker compose stack to be running",
     "slow: long-running benchmark or stress test",
 ]
+
+[tool.bandit]
+# Reviewed and accepted, with justification:
+#   B104 binding to 0.0.0.0 -- correct inside a container; exposure is
+#        controlled by the compose network and published ports, not the bind
+#        address. The device sits on an internal network with no route out.
+#   B310 urllib.request.urlopen -- the legacy device deliberately uses the
+#        standard library rather than an HTTP client package, and the URL comes
+#        from GATEWAY_URL, which is operator-supplied configuration rather than
+#        untrusted input.
+skips = ["B104", "B310"]
+exclude_dirs = ["tests", ".venv"]
