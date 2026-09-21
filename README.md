@@ -72,9 +72,14 @@ leaves genuine last-mile exposure. See [docs/risks.md](docs/risks.md).
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.observability.yml up --build
 ```
 
-Grafana is at `localhost:3000`, Prometheus at `localhost:9090`. The dashboard's
-headline panel is `pqc_quantum_vulnerable_frames_total` — the number a real
-migration is trying to drive to zero.
+Grafana is at `localhost:3000`, Prometheus at `localhost:9090`.
+
+The headline panel is `pqc_quantum_vulnerable_frames_total` **scoped to the
+cloud**, which sits at zero once the migration is complete. A second panel
+tracks the same counter at the *gateway*, which is deliberately non-zero: the
+device can only speak the legacy suite, so the gateway must accept it. Reading
+those two numbers separately is the whole point — summing them across the
+deployment shows a healthy migration as a failure.
 
 ## Repository layout
 

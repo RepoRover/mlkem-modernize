@@ -44,8 +44,13 @@ Watch `pqc_frames_total{suite=...}` per gateway to confirm each cutover, and
 Once every gateway reports the post-quantum suite, the cloud sets
 `ALLOW_LEGACY_SUITE=false` and refuses quantum-vulnerable traffic outright.
 Legacy requests then return HTTP 403 and are logged, so a straggler is loud
-rather than silently accepted. `pqc_quantum_vulnerable_frames_total` at the
-cloud should be flat at zero from this point.
+rather than silently accepted. `pqc_quantum_vulnerable_frames_total{service="cloud"}`
+should be flat at zero from this point.
+
+The service label is load-bearing. The same counter at the *gateway* keeps
+rising for as long as the device transmits, because the gateway has to accept a
+suite the device cannot replace. Aggregating the two hides the completion signal
+behind the residual exposure.
 
 This is the state in `deploy/docker-compose.yml`.
 

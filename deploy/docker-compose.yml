@@ -120,6 +120,10 @@ services:
       DATASET_PATH: /data/weather_data.csv
       SEND_INTERVAL_SECONDS: "0.2"
       MAX_READINGS: "0"
+      # Replay the year continuously. Without this the device stops after 366
+      # readings and every dashboard rate decays to zero, which looks like the
+      # migration working when it only means the data ran out.
+      LOOP_FOREVER: "true"
     volumes:
       - ../data:/data:ro
     networks: [edge]

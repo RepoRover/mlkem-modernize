@@ -5,10 +5,16 @@ device can use it, and prometheus_client is a third-party dependency the device
 does not have.
 
 The series that matters operationally is
-``pqc_quantum_vulnerable_frames_total``. During a fleet migration the question
-an operator actually needs answered is "how much traffic is still protected by
-something a quantum computer will break?", and that number should fall to zero
-and stay there. Everything else here supports diagnosing why it has not.
+``pqc_quantum_vulnerable_frames_total``, but it must be read **per service**.
+Summing it across the deployment is misleading: the gateway necessarily accepts
+quantum-vulnerable frames from a device that cannot speak anything else, so the
+total can never reach zero and a dashboard that aggregates it will show a
+healthy migration as a failure.
+
+Scoped to the cloud, the counter answers the question that matters -- did
+quantum-vulnerable traffic get all the way in? -- and should stay at zero once
+every gateway has cut over. Scoped to the gateway, it quantifies the residual
+last-mile exposure that brokering does not remove.
 """
 
 from __future__ import annotations
@@ -55,7 +61,8 @@ FRAMES = Counter(
 QUANTUM_VULNERABLE_FRAMES = Counter(
     "pqc_quantum_vulnerable_frames_total",
     "Frames accepted under a suite a quantum adversary is expected to break. "
-    "This is the migration's primary indicator and should reach zero.",
+    "Read per service: zero at the cloud means the migration is complete, while "
+    "a non-zero count at the gateway is the expected last-mile exposure.",
     ["service", "suite"],
     registry=REGISTRY,
 )

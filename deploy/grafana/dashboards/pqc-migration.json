@@ -5,16 +5,20 @@
   "timezone": "browser",
   "schemaVersion": 39,
   "refresh": "5s",
-  "time": {"from": "now-15m", "to": "now"},
+  "time": {"from": "now-30m", "to": "now"},
   "panels": [
     {
       "id": 1,
       "type": "stat",
-      "title": "Quantum-vulnerable frames accepted",
-      "description": "The migration's primary indicator. Traffic accepted under a suite a quantum adversary is expected to break. Should reach zero and stay there.",
+      "title": "Quantum-vulnerable frames accepted by the CLOUD",
+      "description": "The migration's success indicator. Scoped to the cloud on purpose: the cloud is the node we control end to end, so any non-zero value here means quantum-vulnerable traffic got all the way in. A cumulative counter is right for this question - 'has this EVER happened' - because one accepted frame is already a problem. Stays at 0 once the gateway speaks the post-quantum suite.",
       "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
       "targets": [
-        {"expr": "sum(pqc_quantum_vulnerable_frames_total)", "legendFormat": "vulnerable", "refId": "A"}
+        {
+          "expr": "sum(pqc_quantum_vulnerable_frames_total{service=\"cloud\"}) or vector(0)",
+          "legendFormat": "accepted",
+          "refId": "A"
+        }
       ],
       "fieldConfig": {
         "defaults": {
@@ -30,18 +34,31 @@
     },
     {
       "id": 2,
-      "type": "piechart",
-      "title": "Accepted frames by suite",
+      "type": "stat",
+      "title": "Last-mile exposure at the GATEWAY (expected)",
+      "description": "Legacy frames the gateway accepts from the device. This is NOT a failure and will never reach zero: the device is frozen firmware that can only speak the legacy suite, so brokering means the gateway must accept it. Tracking it separately is the point - it quantifies the residual risk the migration does not remove. See docs/risks.md R1.",
       "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
       "targets": [
-        {"expr": "sum by (suite) (pqc_frames_total{result=\"accepted\"})", "legendFormat": "{{suite}}", "refId": "A"}
-      ]
+        {
+          "expr": "sum(pqc_quantum_vulnerable_frames_total{service=\"gateway\"}) or vector(0)",
+          "legendFormat": "device link",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "blue", "value": null}]
+          }
+        }
+      }
     },
     {
       "id": 3,
       "type": "table",
       "title": "Suite in use per link",
-      "description": "Which cipher suite each node is configured to use, and whether it is quantum-resistant.",
+      "description": "Configured posture of every link. quantum_resistant=false on the device link is the architecture working as designed, not a misconfiguration.",
       "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
       "targets": [
         {"expr": "pqc_suite_in_use", "format": "table", "instant": true, "refId": "A"}
@@ -50,12 +67,41 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Handshake duration p95 by suite",
-      "description": "ML-KEM decapsulation is cheaper than RSA decryption, but the hybrid handshake does more work overall on the initiator.",
+      "title": "Vulnerable frame rate, by service",
+      "description": "Rate rather than cumulative total, so this answers 'is it happening right now'. The gateway line should be steady while the device transmits; the cloud line should sit flat on zero. If the cloud line ever lifts, the migration has regressed.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, suite) (rate(pqc_handshake_duration_seconds_bucket[1m])))",
+          "expr": "sum by (service) (rate(pqc_quantum_vulnerable_frames_total[1m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 10}}}
+    },
+    {
+      "id": 5,
+      "type": "piechart",
+      "title": "Frames accepted by the cloud, by suite",
+      "description": "After migration this should be entirely post-quantum.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {
+          "expr": "sum by (suite) (pqc_frames_total{service=\"cloud\",result=\"accepted\"})",
+          "legendFormat": "{{suite}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Handshake duration p95 by suite",
+      "description": "ML-KEM decapsulation is cheaper than RSA decryption, but the hybrid handshake does more work overall on the initiator.",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 14},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, suite) (rate(pqc_handshake_duration_seconds_bucket[5m])))",
           "legendFormat": "{{suite}}",
           "refId": "A"
         }
@@ -63,23 +109,19 @@
       "fieldConfig": {"defaults": {"unit": "s"}}
     },
     {
-      "id": 5,
+      "id": 7,
       "type": "timeseries",
       "title": "Frame outcomes",
       "description": "A rise in rejected frames during a migration usually means a suite mismatch rather than an attack.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 14},
       "targets": [
-        {"expr": "sum by (result) (rate(pqc_frames_total[1m]))", "legendFormat": "{{result}}", "refId": "A"}
-      ]
-    },
-    {
-      "id": 6,
-      "type": "timeseries",
-      "title": "Active sessions",
-      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 14},
-      "targets": [
-        {"expr": "pqc_active_sessions", "legendFormat": "{{service}}", "refId": "A"}
-      ]
+        {
+          "expr": "sum by (result) (rate(pqc_frames_total[1m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
     }
   ]
 }
