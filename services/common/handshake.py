@@ -31,7 +31,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import cryptoutil as cu
-from .wire import HOP_DEVICE_GATEWAY, HOP_GATEWAY_CLOUD, PROTOCOL, lp, s
+from .suites import SUITE_CLASSICAL, SUITE_HYBRID, canonical_suites
+from .wire import (
+    DIR_CLIENT_TO_SERVER,
+    DIR_SERVER_TO_CLIENT,
+    HOP_DEVICE_GATEWAY,
+    HOP_GATEWAY_CLOUD,
+    PROTOCOL,
+    PROTOCOL_V2,
+    lp,
+    s,
+)
 
 
 class HandshakeError(Exception):
@@ -40,7 +50,19 @@ class HandshakeError(Exception):
 
 @dataclass(frozen=True)
 class DerivedSession:
-    """Output of a completed handshake, for either hop."""
+    """Output of a hop 1 handshake: ONE key, used in ONE direction.
+
+    Hop 1 is strictly one-way encrypted: the device encrypts readings to the
+    gateway and the gateway answers in plaintext. There is therefore no second
+    direction that could reuse this (key, nonce_prefix) pair.
+
+    That is enforced, not merely hoped for: the gateway never constructs an
+    AeadSender for hop 1, and `tests/test_pqc.py::test_hop1_is_strictly_one_way`
+    asserts the responses are plaintext. If encrypted responses are ever added
+    to hop 1, this type must become a DirectionalSession first -- reusing this
+    key with the same nonce prefix in the other direction would repeat
+    (key, nonce) pairs and break AES-GCM catastrophically.
+    """
 
     session_id: bytes
     nonce_prefix: bytes
@@ -49,6 +71,35 @@ class DerivedSession:
     def __repr__(self) -> str:  # pragma: no cover - defensive
         # Make it impossible to leak the session key into a log line by accident.
         return f"DerivedSession(session_id={self.session_id.hex()}, key=<redacted>)"
+
+
+@dataclass(frozen=True)
+class DirectionalSession:
+    """Output of a hop 2 v2 handshake: a SEPARATE key per direction.
+
+    Both directions share a session id and nonce prefix, so if they also shared
+    a key then message N from the gateway and message N from the cloud would use
+    the same (key, nonce) pair -- the one thing AES-GCM must never do. Deriving
+    two keys from the same HKDF input with different direction labels removes
+    the possibility entirely, rather than relying on the channel staying
+    one-way by convention.
+
+    Only `key_c2s` carries data today; responses are still plaintext (W5).
+    `key_s2c` is derived anyway so that adding encrypted responses later cannot
+    accidentally reuse the sending key.
+    """
+
+    session_id: bytes
+    nonce_prefix: bytes
+    key_c2s: bytes  # gateway -> cloud
+    key_s2c: bytes  # cloud -> gateway
+    suite: str
+
+    def __repr__(self) -> str:  # pragma: no cover - defensive
+        return (
+            f"DirectionalSession(session_id={self.session_id.hex()}, "
+            f"suite={self.suite}, keys=<redacted>)"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -164,3 +215,222 @@ def hop2_derive(
     key = cu.hkdf_sha256(ikm=z, salt=client_nonce + server_nonce, info=info)
 
     return DerivedSession(session_id=session_id, nonce_prefix=nonce_prefix, key=key)
+
+
+# --------------------------------------------------------------------------
+# hop 2 v2: suite negotiation + hybrid X25519 + ML-KEM-768
+# --------------------------------------------------------------------------
+#
+# Message flow (one round trip, no extra trip for negotiation):
+#
+#   gateway -> cloud   ClientHello   offered_suites + a key share per suite,
+#                                    signed with the gateway's long-term ECDSA key
+#   cloud   -> gateway ServerHello   selected_suite + the matching key share
+#                                    (for hybrid: the ML-KEM ciphertext),
+#                                    signed over the FULL transcript
+#
+# The gateway generates the ML-KEM keypair and the cloud encapsulates to it,
+# matching TLS 1.3's direction for key_share.
+
+
+@dataclass(frozen=True)
+class KeyShare:
+    """A peer's public key material for one suite. Absent parts are b"".
+
+    Carried verbatim into the transcript, so an absent part contributes a
+    zero-length field rather than being skipped -- otherwise a hybrid share and
+    a classical share could produce the same transcript bytes.
+    """
+
+    x25519_pub: bytes = b""
+    mlkem768_ek: bytes = b""
+    p256_pub: bytes = b""
+
+
+def _share_fields(share: KeyShare) -> tuple[bytes, bytes, bytes]:
+    return (share.x25519_pub, share.mlkem768_ek, share.p256_pub)
+
+
+def hop2_v2_client_transcript(
+    client_id: str,
+    client_nonce: bytes,
+    offered_suites: "tuple[str, ...] | list[str]",
+    shares: "dict[str, KeyShare]",
+) -> bytes:
+    """Bytes the gateway signs in its v2 ClientHello.
+
+    Covers the whole offer -- every suite name AND every key share. An attacker
+    who strips `hybrid-x25519-mlkem768` from the list, or swaps a key share,
+    changes these bytes and the cloud's signature check fails. This is the first
+    of the three downgrade defences (signature, KDF binding, policy).
+    """
+    parts: list[bytes] = [
+        s(PROTOCOL_V2),
+        s(HOP_GATEWAY_CLOUD),
+        s("client-hello"),
+        s(client_id),
+        client_nonce,
+        s(canonical_suites(list(offered_suites))),
+    ]
+    # Iterate the offered order, not dict order, so the transcript is stable.
+    for suite in offered_suites:
+        share = shares.get(suite, KeyShare())
+        parts.append(s(suite))
+        parts.extend(_share_fields(share))
+    return lp(*parts)
+
+
+def hop2_v2_server_transcript(
+    client_id: str,
+    client_nonce: bytes,
+    offered_suites: "tuple[str, ...] | list[str]",
+    client_shares: "dict[str, KeyShare]",
+    selected_suite: str,
+    session_id: bytes,
+    server_nonce: bytes,
+    server_share: KeyShare,
+    mlkem768_ct: bytes,
+    nonce_prefix: bytes,
+    expires_at: str,
+    max_records: int,
+) -> bytes:
+    """Bytes the cloud signs in its v2 ServerHello.
+
+    Deliberately re-includes the client's entire offer. That is what makes a
+    downgrade detectable: the gateway verifies this signature against the offer
+    it actually sent, so a man-in-the-middle who removed the hybrid suite on the
+    way out cannot produce a ServerHello the gateway will accept.
+
+    It also binds session_id, nonce_prefix and the expiry, so a captured
+    ServerHello cannot be replayed into a different session.
+    """
+    parts: list[bytes] = [
+        s(PROTOCOL_V2),
+        s(HOP_GATEWAY_CLOUD),
+        s("server-hello"),
+        s(client_id),
+        client_nonce,
+        s(canonical_suites(list(offered_suites))),
+    ]
+    for suite in offered_suites:
+        share = client_shares.get(suite, KeyShare())
+        parts.append(s(suite))
+        parts.extend(_share_fields(share))
+    parts.extend(
+        [
+            s(selected_suite),
+            session_id,
+            server_nonce,
+            *_share_fields(server_share),
+            mlkem768_ct,
+            nonce_prefix,
+            s(expires_at),
+            s(str(max_records)),
+        ]
+    )
+    return lp(*parts)
+
+
+def _hop2_v2_info_base(
+    selected_suite: str,
+    client_id: str,
+    offered_suites: "tuple[str, ...] | list[str]",
+    client_nonce: bytes,
+    server_nonce: bytes,
+    client_share: KeyShare,
+    server_share: KeyShare,
+    mlkem768_ct: bytes,
+) -> bytes:
+    """Shared HKDF info for both directions.
+
+    Binds everything that was negotiated: the selected suite, the FULL offer
+    list, both nonces, both key shares and the ML-KEM ciphertext. CLAUDE.md
+    requires both public keys and the ciphertext to be in the transcript; the
+    offer list is the extra binding that makes a downgrade change the key.
+    """
+    return lp(
+        s(PROTOCOL_V2),
+        s(HOP_GATEWAY_CLOUD),
+        s(selected_suite),
+        s(client_id),
+        s(canonical_suites(list(offered_suites))),
+        client_nonce,
+        server_nonce,
+        *_share_fields(client_share),
+        *_share_fields(server_share),
+        mlkem768_ct,
+    )
+
+
+def hop2_v2_derive(
+    selected_suite: str,
+    ss_mlkem768: bytes,
+    ss_classical: bytes,
+    client_id: str,
+    offered_suites: "tuple[str, ...] | list[str]",
+    client_nonce: bytes,
+    server_nonce: bytes,
+    client_share: KeyShare,
+    server_share: KeyShare,
+    mlkem768_ct: bytes,
+    session_id: bytes,
+    nonce_prefix: bytes,
+) -> DirectionalSession:
+    """Derive the per-direction session keys. Both sides run this identically.
+
+    The combiner is concatenation into HKDF, with the ML-KEM secret FIRST:
+
+        IKM = ss_mlkem768 ‖ ss_x25519          (hybrid)
+        IKM = ss_p256                          (classical fallback)
+
+    ML-KEM goes first because NIST SP 800-56C Rev2 permits HKDF over two shared
+    secrets provided the FIPS-approved one leads. TLS's X25519MLKEM768 orders it
+    the same way, so we match a construction that has had real scrutiny rather
+    than inventing our own.
+
+    The security claim: the hybrid key is safe if EITHER ML-KEM or X25519 holds.
+    A classical attacker must break ML-KEM; a quantum attacker must break
+    X25519 *and* ML-KEM, and only ML-KEM is believed to resist them.
+
+    Per-direction keys come from the same IKM with different direction labels
+    appended to the info, so the two directions can share a nonce prefix without
+    ever repeating a (key, nonce) pair.
+    """
+    if selected_suite == SUITE_HYBRID:
+        if len(ss_mlkem768) != cu.MLKEM768_SS_LEN:
+            raise HandshakeError("ML-KEM shared secret has the wrong length")
+        if len(ss_classical) != cu.X25519_SHARED_LEN:
+            raise HandshakeError("X25519 shared secret has the wrong length")
+        ikm = ss_mlkem768 + ss_classical
+    elif selected_suite == SUITE_CLASSICAL:
+        if ss_mlkem768:
+            raise HandshakeError("classical suite must not carry an ML-KEM secret")
+        if len(ss_classical) != cu.SHARED_SECRET_LEN:
+            raise HandshakeError("P-256 shared secret has the wrong length")
+        ikm = ss_classical
+    else:
+        raise HandshakeError(f"unknown suite {selected_suite!r}")
+
+    info_base = _hop2_v2_info_base(
+        selected_suite=selected_suite,
+        client_id=client_id,
+        offered_suites=offered_suites,
+        client_nonce=client_nonce,
+        server_nonce=server_nonce,
+        client_share=client_share,
+        server_share=server_share,
+        mlkem768_ct=mlkem768_ct,
+    )
+    salt = client_nonce + server_nonce
+
+    return DirectionalSession(
+        session_id=session_id,
+        nonce_prefix=nonce_prefix,
+        key_c2s=cu.hkdf_sha256(
+            ikm=ikm, salt=salt, info=info_base + lp(s(DIR_CLIENT_TO_SERVER))
+        ),
+        key_s2c=cu.hkdf_sha256(
+            ikm=ikm, salt=salt, info=info_base + lp(s(DIR_SERVER_TO_CLIENT))
+        ),
+        suite=selected_suite,
+    )

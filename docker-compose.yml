@@ -35,6 +35,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-600}
       MAX_RECORDS_PER_SESSION: ${MAX_RECORDS_PER_SESSION:-100}
+      # Hop 2 post-quantum policy. The cloud is the enforcement point and
+      # REQUIRES hybrid PQC by default; see docs/MIGRATION.md for the phases.
+      #   require        refuse classical-only peers (default)
+      #   prefer         hybrid when possible, classical logged+counted
+      #   classical-only explicit opt-out, logged loudly at startup
+      PQC_POLICY: ${CLOUD_PQC_POLICY:-require}
     volumes:
       - keys:/keys:ro
       - clouddata:/var/lib/weather
@@ -62,6 +68,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-600}
       MAX_RECORDS_PER_SESSION: ${MAX_RECORDS_PER_SESSION:-100}
+      # The gateway PREFERS PQC by default so phase 1 can run against a cloud
+      # that is still rolling out. Set to 'require' at phase 2.
+      PQC_POLICY: ${GATEWAY_PQC_POLICY:-prefer}
     volumes:
       - keys:/keys:ro
     depends_on:

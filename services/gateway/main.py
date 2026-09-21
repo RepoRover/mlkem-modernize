@@ -29,6 +29,7 @@ from ..common.config import (
 )
 from ..common.handshake import HandshakeError, hop1_derive
 from ..common.sessions import ServerSession, SessionStore, iso, utc_now
+from ..common.suites import Policy
 from ..common.weather import ValidationError, validate_reading
 from ..common.wire import HOP_DEVICE_GATEWAY, PROTOCOL, b64d, b64e
 from .cloud_client import CloudClient
@@ -45,12 +46,19 @@ def create_app(
     ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
     max_records: int = DEFAULT_MAX_RECORDS_PER_SESSION,
     cloud_client: CloudClient | None = None,
+    policy: Policy = Policy.PREFER,
 ) -> FastAPI:
     keys = Path(keys_dir)
     gateway_ecdh_priv = cu.load_private_key(keys / "gateway_ecdh_priv.pem")
     # Device registry: the device's static ECDH public key IS its identity on
     # hop 1. No certificates, no revocation -- legacy firmware reality.
     device_registry = {"device-berlin-01": cu.load_public_key(keys / "device_ecdh_pub.pem")}
+
+    if policy is Policy.CLASSICAL_ONLY:
+        log.warning(
+            "PQC POLICY IS 'classical-only' -- the gateway will not offer "
+            "post-quantum key establishment to the cloud. Explicit opt-out."
+        )
 
     if cloud_client is None:
         cloud_client = CloudClient(
@@ -59,6 +67,7 @@ def create_app(
             signing_key=cu.load_private_key(keys / "gateway_ecdsa_priv.pem"),
             cloud_public_key=cu.load_public_key(keys / "cloud_ecdsa_pub.pem"),
             log=log,
+            policy=policy,
         )
 
     sessions = SessionStore(ttl_seconds=ttl_seconds, max_records=max_records)
@@ -122,6 +131,7 @@ def create_app(
                 receiver=cu.AeadReceiver(derived.key, session_id, nonce_prefix),
                 expires_at=expires_at,
                 max_records=max_records,
+                suite=SUITE_HOP1,
             )
         )
         counters["handshakes"] += 1
@@ -233,11 +243,24 @@ def create_app(
             "gateway_id": gateway_id,
             "sessions_active": sessions.active,
             "messages": dict(counters),
+            "hop1": {"suite": SUITE_HOP1, "post_quantum": False},
+            "hop2": {
+                "policy": policy.value,
+                "current_suite": cloud_client.suite,
+                "handshakes_hybrid": cloud_client.handshakes_hybrid,
+                "handshakes_classical": cloud_client.handshakes_classical,
+            },
         }
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "service": "gateway", "hop1_suite": SUITE_HOP1}
+    def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "service": "gateway",
+            "hop1_suite": SUITE_HOP1,
+            "hop2_policy": policy.value,
+            "hop2_suite": cloud_client.suite,
+        }
 
     return app
 
@@ -249,6 +272,10 @@ def build_default_app() -> FastAPI:
         gateway_id=env_str("GATEWAY_ID", "gw-01"),
         ttl_seconds=env_int("SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS),
         max_records=env_int("MAX_RECORDS_PER_SESSION", DEFAULT_MAX_RECORDS_PER_SESSION),
+        # The gateway PREFERS PQC by default rather than requiring it, so that
+        # phase 1 of the migration can run against a cloud that is still being
+        # rolled out. The cloud defaults to 'require'; it is the enforcement point.
+        policy=Policy.parse(env_str("PQC_POLICY", Policy.PREFER.value)),
     )
 
 

@@ -30,7 +30,7 @@ from services.common.weather import (
     parse_weather_text,
     validate_reading,
 )
-from services.common.wire import b64d, b64e
+from services.common.wire import PROTOCOL_V2, b64d, b64e
 from services.gateway.cloud_client import CloudClient
 from services.gateway.main import create_app as create_gateway_app
 
@@ -115,62 +115,88 @@ class Hop1Session:
 
 
 class Hop2Session:
-    """A hand-driven hop 2 client, so the cloud's reject paths can be hit directly.
+    """A hand-driven hop 2 v2 client, so the cloud's reject paths can be hit directly.
 
-    Hop 2 is the hop ML-KEM replaces, so its failure handling is the part most
-    likely to be disturbed by the migration. Worth testing against the cloud
-    itself rather than only through the gateway.
+    Speaks the hybrid PQC handshake, because that is now the default path. The
+    classical fallback is exercised separately in tests/test_pqc.py.
     """
 
     def __init__(self, cloud_http: TestClient, keys_dir: Path, signing_key=None):
         from services.common.handshake import (
-            hop2_client_transcript,
-            hop2_derive,
-            hop2_server_transcript,
+            KeyShare,
+            hop2_v2_client_transcript,
+            hop2_v2_derive,
+            hop2_v2_server_transcript,
         )
+        from services.common.suites import SUITE_HYBRID
 
         self.http = cloud_http
         signing_key = signing_key or cu.load_private_key(keys_dir / "gateway_ecdsa_priv.pem")
 
         nonce = cu.random_bytes(cu.HANDSHAKE_NONCE_LEN)
-        eph = cu.generate_private_key()
-        eph_pub = cu.public_key_to_bytes(eph.public_key())
+        x_priv = cu.generate_x25519_private_key()
+        x_pub = cu.x25519_public_bytes(x_priv.public_key())
+        kem_priv = cu.generate_mlkem768_private_key()
+        ek = cu.mlkem768_encapsulation_key_bytes(kem_priv)
+
+        offered = [SUITE_HYBRID]
+        shares = {SUITE_HYBRID: KeyShare(x25519_pub=x_pub, mlkem768_ek=ek)}
 
         hello = cloud_http.post(
             "/handshake",
             json={
-                "protocol": PROTOCOL,
+                "protocol": PROTOCOL_V2,
                 "hop": "gateway-cloud",
                 "client_id": "gw-01",
                 "client_nonce": b64e(nonce),
-                "eph_pub": b64e(eph_pub),
-                "sig": b64e(cu.sign(signing_key,
-                                    hop2_client_transcript("gw-01", nonce, eph_pub))),
+                "offered_suites": offered,
+                "key_shares": {
+                    SUITE_HYBRID: {"x25519_pub": b64e(x_pub), "mlkem768_ek": b64e(ek)}
+                },
+                "sig": b64e(
+                    cu.sign(
+                        signing_key,
+                        hop2_v2_client_transcript("gw-01", nonce, offered, shares),
+                    )
+                ),
             },
         )
         assert hello.status_code == 200, hello.text
         body = hello.json()
+        assert body["selected_suite"] == SUITE_HYBRID
 
         self.session_id = b64d(body["session_id"])
         self.prefix = b64d(body["nonce_prefix"])
-        server_eph_pub = b64d(body["eph_pub"])
+        server_x_pub = b64d(body["x25519_pub"])
+        self.mlkem_ct = b64d(body["mlkem768_ct"])
+        server_share = KeyShare(x25519_pub=server_x_pub)
 
         # Verify the server signature, exactly as the real gateway does.
-        transcript = hop2_server_transcript(
-            "gw-01", nonce, eph_pub, self.session_id, b64d(body["server_nonce"]),
-            server_eph_pub, self.prefix, body["expires_at"], int(body["max_records"]),
+        transcript = hop2_v2_server_transcript(
+            client_id="gw-01", client_nonce=nonce, offered_suites=offered,
+            client_shares=shares, selected_suite=SUITE_HYBRID,
+            session_id=self.session_id, server_nonce=b64d(body["server_nonce"]),
+            server_share=server_share, mlkem768_ct=self.mlkem_ct,
+            nonce_prefix=self.prefix, expires_at=body["expires_at"],
+            max_records=int(body["max_records"]),
         )
         assert cu.verify(
             cu.load_public_key(keys_dir / "cloud_ecdsa_pub.pem"),
             b64d(body["sig"]), transcript,
         )
 
-        derived = hop2_derive(
-            eph, cu.public_key_from_bytes(server_eph_pub), nonce,
-            b64d(body["server_nonce"]), eph_pub, server_eph_pub,
-            self.session_id, self.prefix,
+        derived = hop2_v2_derive(
+            selected_suite=SUITE_HYBRID,
+            ss_mlkem768=cu.mlkem768_decapsulate(kem_priv, self.mlkem_ct),
+            ss_classical=cu.x25519_exchange(x_priv, cu.x25519_public_from_bytes(server_x_pub)),
+            client_id="gw-01", offered_suites=offered,
+            client_nonce=nonce, server_nonce=b64d(body["server_nonce"]),
+            client_share=shares[SUITE_HYBRID], server_share=server_share,
+            mlkem768_ct=self.mlkem_ct,
+            session_id=self.session_id, nonce_prefix=self.prefix,
         )
-        self.sender = cu.AeadSender(derived.key, self.session_id, self.prefix)
+        # We SEND on the client->server key.
+        self.sender = cu.AeadSender(derived.key_c2s, self.session_id, self.prefix)
 
     def seal(self, envelope: dict):
         return self.sender.encrypt(json.dumps(envelope).encode())
@@ -367,21 +393,28 @@ def test_unknown_device_id_is_refused_at_handshake(gw):
 def test_forged_gateway_signature_is_refused_by_cloud(gw):
     """Hop 2 auth is explicit, so a forgery fails at the handshake itself."""
     _, cloud_http, _ = gw
-    from services.common.handshake import hop2_client_transcript
+    from services.common.handshake import KeyShare, hop2_v2_client_transcript
+    from services.common.suites import SUITE_HYBRID
 
     impostor = cu.generate_private_key()
-    eph_pub = cu.public_key_to_bytes(cu.generate_private_key().public_key())
+    x_pub = cu.x25519_public_bytes(cu.generate_x25519_private_key().public_key())
+    ek = cu.mlkem768_encapsulation_key_bytes(cu.generate_mlkem768_private_key())
     nonce = cu.random_bytes(16)
+    offered = [SUITE_HYBRID]
+    shares = {SUITE_HYBRID: KeyShare(x25519_pub=x_pub, mlkem768_ek=ek)}
 
     response = cloud_http.post(
         "/handshake",
         json={
-            "protocol": PROTOCOL,
+            "protocol": PROTOCOL_V2,
             "hop": "gateway-cloud",
             "client_id": "gw-01",
             "client_nonce": b64e(nonce),
-            "eph_pub": b64e(eph_pub),
-            "sig": b64e(cu.sign(impostor, hop2_client_transcript("gw-01", nonce, eph_pub))),
+            "offered_suites": offered,
+            "key_shares": {SUITE_HYBRID: {"x25519_pub": b64e(x_pub), "mlkem768_ek": b64e(ek)}},
+            "sig": b64e(
+                cu.sign(impostor, hop2_v2_client_transcript("gw-01", nonce, offered, shares))
+            ),
         },
     )
     assert response.status_code == 403
@@ -390,50 +423,71 @@ def test_forged_gateway_signature_is_refused_by_cloud(gw):
 def test_signature_over_a_different_transcript_is_refused(gw):
     """Signing the right way over the wrong bytes must not verify."""
     _, cloud_http, keys_dir = gw
-    from services.common.handshake import hop2_client_transcript
+    from services.common.handshake import KeyShare, hop2_v2_client_transcript
+    from services.common.suites import SUITE_HYBRID
 
     real_key = cu.load_private_key(keys_dir / "gateway_ecdsa_priv.pem")
-    eph_pub = cu.public_key_to_bytes(cu.generate_private_key().public_key())
+    x_pub = cu.x25519_public_bytes(cu.generate_x25519_private_key().public_key())
+    ek = cu.mlkem768_encapsulation_key_bytes(cu.generate_mlkem768_private_key())
     nonce = cu.random_bytes(16)
+    offered = [SUITE_HYBRID]
+    shares = {SUITE_HYBRID: KeyShare(x25519_pub=x_pub, mlkem768_ek=ek)}
 
     # Valid signature, but over a different nonce than the one we send.
-    wrong = hop2_client_transcript("gw-01", cu.random_bytes(16), eph_pub)
+    wrong = hop2_v2_client_transcript("gw-01", cu.random_bytes(16), offered, shares)
     response = cloud_http.post(
         "/handshake",
         json={
-            "protocol": PROTOCOL,
+            "protocol": PROTOCOL_V2,
             "hop": "gateway-cloud",
             "client_id": "gw-01",
             "client_nonce": b64e(nonce),
-            "eph_pub": b64e(eph_pub),
+            "offered_suites": offered,
+            "key_shares": {SUITE_HYBRID: {"x25519_pub": b64e(x_pub), "mlkem768_ek": b64e(ek)}},
             "sig": b64e(cu.sign(real_key, wrong)),
         },
     )
     assert response.status_code == 403
 
 
-def test_invalid_curve_point_is_rejected_not_crashed(gw):
-    """An off-curve ephemeral key must be refused before any ECDH happens."""
-    _, cloud_http, keys_dir = gw
-    from services.common.handshake import hop2_client_transcript
+def test_invalid_curve_point_is_rejected_not_crashed(keys_dir: Path):
+    """An off-curve P-256 point must be refused before any ECDH happens.
+
+    Built with a classical-permitting policy on purpose: under the default
+    'require' the handshake would be refused earlier, for a different and much
+    less interesting reason, and this check would never run.
+    """
+    from services.common.handshake import KeyShare, hop2_v2_client_transcript
+    from services.common.suites import SUITE_CLASSICAL, Policy
+
+    cloud_app = create_cloud_app(
+        keys_dir=str(keys_dir), db_path=":memory:", policy=Policy.CLASSICAL_ONLY
+    )
+    cloud_http = TestClient(cloud_app, base_url="http://cloud")
 
     real_key = cu.load_private_key(keys_dir / "gateway_ecdsa_priv.pem")
     nonce = cu.random_bytes(16)
     bogus = b"\x04" + b"\x01" * 64  # well-formed encoding, not on P-256
+    offered = [SUITE_CLASSICAL]
+    shares = {SUITE_CLASSICAL: KeyShare(p256_pub=bogus)}
 
     response = cloud_http.post(
         "/handshake",
         json={
-            "protocol": PROTOCOL,
+            "protocol": PROTOCOL_V2,
             "hop": "gateway-cloud",
             "client_id": "gw-01",
             "client_nonce": b64e(nonce),
-            "eph_pub": b64e(bogus),
-            "sig": b64e(cu.sign(real_key, hop2_client_transcript("gw-01", nonce, bogus))),
+            "offered_suites": offered,
+            "key_shares": {SUITE_CLASSICAL: {"eph_pub": b64e(bogus)}},
+            "sig": b64e(
+                cu.sign(real_key, hop2_v2_client_transcript("gw-01", nonce, offered, shares))
+            ),
         },
     )
     assert response.status_code == 400
     assert cloud_http.get("/health").json()["status"] == "ok"
+    cloud_http.close()
 
 
 # ------------------------------------------------------- malformed readings
@@ -769,12 +823,29 @@ def test_hop2_malformed_frame_is_rejected(gw, body):
     [
         {},
         {"protocol": "wrong/9", "hop": "gateway-cloud", "client_id": "gw-01"},
-        {"protocol": PROTOCOL, "hop": "device-gateway", "client_id": "gw-01"},
-        {"protocol": PROTOCOL, "hop": "gateway-cloud", "client_id": "unknown-gw"},
-        {"protocol": PROTOCOL, "hop": "gateway-cloud", "client_id": "gw-01",
-         "client_nonce": "not-base64!", "eph_pub": "AAAA", "sig": "AAAA"},
-        {"protocol": PROTOCOL, "hop": "gateway-cloud", "client_id": "gw-01",
-         "client_nonce": b64e(b"too-short"), "eph_pub": "AAAA", "sig": "AAAA"},
+        {"protocol": PROTOCOL_V2, "hop": "device-gateway", "client_id": "gw-01"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "unknown-gw"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "gw-01",
+         "client_nonce": "not-base64!", "offered_suites": ["hybrid-x25519-mlkem768"],
+         "key_shares": {}, "sig": "AAAA"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "gw-01",
+         "client_nonce": b64e(b"too-short"), "offered_suites": ["hybrid-x25519-mlkem768"],
+         "key_shares": {}, "sig": "AAAA"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "gw-01",
+         "client_nonce": b64e(b"n" * 16), "offered_suites": "not-a-list",
+         "key_shares": {}, "sig": "AAAA"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "gw-01",
+         "client_nonce": b64e(b"n" * 16), "offered_suites": [], "key_shares": {},
+         "sig": "AAAA"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "gw-01",
+         "client_nonce": b64e(b"n" * 16), "offered_suites": ["a"] * 99,
+         "key_shares": {}, "sig": "AAAA"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "gw-01",
+         "client_nonce": b64e(b"n" * 16), "offered_suites": [123],
+         "key_shares": {}, "sig": "AAAA"},
+        {"protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": "gw-01",
+         "client_nonce": b64e(b"n" * 16), "offered_suites": ["hybrid-x25519-mlkem768"],
+         "key_shares": "not-an-object", "sig": "AAAA"},
     ],
 )
 def test_hop2_malformed_handshake_is_rejected(gw, body):
@@ -785,19 +856,25 @@ def test_hop2_malformed_handshake_is_rejected(gw, body):
 
 
 def test_hop2_replayed_client_hello_is_rejected(gw, keys_dir: Path):
-    from services.common.handshake import hop2_client_transcript
+    from services.common.handshake import KeyShare, hop2_v2_client_transcript
+    from services.common.suites import SUITE_HYBRID
 
     _, cloud_http, keys_dir = gw
     key = cu.load_private_key(keys_dir / "gateway_ecdsa_priv.pem")
     nonce = cu.random_bytes(16)
-    eph_pub = cu.public_key_to_bytes(cu.generate_private_key().public_key())
+    x_pub = cu.x25519_public_bytes(cu.generate_x25519_private_key().public_key())
+    ek = cu.mlkem768_encapsulation_key_bytes(cu.generate_mlkem768_private_key())
+    offered = [SUITE_HYBRID]
+    shares = {SUITE_HYBRID: KeyShare(x25519_pub=x_pub, mlkem768_ek=ek)}
+
     hello = {
-        "protocol": PROTOCOL,
+        "protocol": PROTOCOL_V2,
         "hop": "gateway-cloud",
         "client_id": "gw-01",
         "client_nonce": b64e(nonce),
-        "eph_pub": b64e(eph_pub),
-        "sig": b64e(cu.sign(key, hop2_client_transcript("gw-01", nonce, eph_pub))),
+        "offered_suites": offered,
+        "key_shares": {SUITE_HYBRID: {"x25519_pub": b64e(x_pub), "mlkem768_ek": b64e(ek)}},
+        "sig": b64e(cu.sign(key, hop2_v2_client_transcript("gw-01", nonce, offered, shares))),
     }
 
     assert cloud_http.post("/handshake", json=hello).status_code == 200

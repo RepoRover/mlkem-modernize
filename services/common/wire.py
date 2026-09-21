@@ -10,10 +10,23 @@ from __future__ import annotations
 import base64
 import struct
 
+#: Hop 1, and the pre-PQC hop 2 handshake. Frozen.
 PROTOCOL = "wx-legacy/1"
+
+#: Hop 2 with suite negotiation and hybrid PQC key establishment.
+PROTOCOL_V2 = "wx-hybrid/2"
+
+#: Versions a peer may send us. Anything else is refused rather than guessed at.
+KNOWN_PROTOCOLS = (PROTOCOL, PROTOCOL_V2)
 
 HOP_DEVICE_GATEWAY = "device-gateway"
 HOP_GATEWAY_CLOUD = "gateway-cloud"
+
+#: Direction labels for per-direction key separation on hop 2 v2.
+#: These go into the HKDF info, so the two directions derive different keys
+#: from the same shared secret and can safely share a nonce prefix.
+DIR_CLIENT_TO_SERVER = "gw->cloud"
+DIR_SERVER_TO_CLIENT = "cloud->gw"
 
 
 def b64e(raw: bytes) -> str:

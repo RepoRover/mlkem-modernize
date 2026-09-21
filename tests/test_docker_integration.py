@@ -103,7 +103,12 @@ def test_keygen_runs_once_and_exits_cleanly(stack):
 def test_cloud_and_gateway_report_healthy(stack):
     cloud = get_json(f"{CLOUD}/health")
     assert cloud["status"] == "ok"
-    assert cloud["suite"] == "ECDHE-P256+ECDSA-P256+AES-256-GCM"
+    # Both protocol versions are understood, and the hybrid suite is offered.
+    assert "wx-hybrid/2" in cloud["protocols"]
+    assert "wx-legacy/1" in cloud["protocols"]
+    assert "hybrid-x25519-mlkem768" in cloud["suites"]
+    # The cloud ships requiring PQC.
+    assert cloud["policy"] == "require"
 
     # The gateway is not published to the host, so ask it from inside the network.
     result = compose(
@@ -137,6 +142,80 @@ def test_the_full_year_flows_device_to_gateway_to_cloud(stack):
 
     # 366 readings against a 100-record budget forces rekeying.
     assert stats["messages"]["handshakes"] >= 4
+
+
+@requires_docker
+def test_hop2_actually_negotiates_hybrid_pqc_in_containers(stack):
+    """The whole point of Phase 4, verified against the real deployment.
+
+    The in-process tests could pass with a misconfigured image; this asserts
+    that the containers as shipped negotiate ML-KEM and never fall back.
+    """
+    stats = get_json(f"{CLOUD}/stats")["pqc"]
+
+    assert stats["policy"] == "require"
+    assert stats["handshakes_hybrid"] >= 4
+    assert stats["handshakes_classical"] == 0, "a classical session was negotiated"
+    assert stats["handshakes_downgrade_refused"] == 0
+    assert stats["pqc_fraction"] == 1.0
+
+    # And the gateway agrees about what it negotiated.
+    result = compose(
+        "exec", "-T", "cloud", "python", "-c",
+        "import urllib.request;print(urllib.request.urlopen"
+        "('http://gateway:8000/stats',timeout=5).read().decode())",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "hybrid-x25519-mlkem768" in result.stdout
+    # Hop 1 is still classical -- the device was not upgraded.
+    assert "ECDH-P256-static-static" in result.stdout
+
+
+@requires_docker
+def test_downgrade_is_refused_by_the_running_cloud(stack):
+    """A classical-only offer against the shipped 'require' policy.
+
+    Runs from inside the network so it reaches the cloud the way the gateway
+    would, and checks the refusal is counted rather than silently handled.
+    """
+    before = get_json(f"{CLOUD}/stats")["pqc"]["handshakes_downgrade_refused"]
+
+    script = """
+import json, sys, urllib.request, urllib.error
+sys.path.insert(0, "/app")
+from services.common import cryptoutil as cu
+from services.common.handshake import KeyShare, hop2_v2_client_transcript
+from services.common.suites import SUITE_CLASSICAL
+from services.common.wire import b64e
+
+nonce = cu.random_bytes(16)
+p256 = cu.public_key_to_bytes(cu.generate_private_key().public_key())
+offered = [SUITE_CLASSICAL]
+shares = {SUITE_CLASSICAL: KeyShare(p256_pub=p256)}
+signing = cu.load_private_key("/keys/gateway_ecdsa_priv.pem")
+
+body = {
+    "protocol": "wx-hybrid/2", "hop": "gateway-cloud", "client_id": "gw-01",
+    "client_nonce": b64e(nonce), "offered_suites": offered,
+    "key_shares": {SUITE_CLASSICAL: {"eph_pub": b64e(p256)}},
+    "sig": b64e(cu.sign(signing, hop2_v2_client_transcript(
+        "gw-01", nonce, offered, shares))),
+}
+try:
+    urllib.request.urlopen(urllib.request.Request(
+        "http://cloud:8000/handshake",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"}), timeout=10)
+    print("RESULT: accepted-should-not-happen")
+except urllib.error.HTTPError as e:
+    print("RESULT:", e.code, json.loads(e.read()).get("detail"))
+"""
+    result = compose("exec", "-T", "gateway", "python", "-c", script)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "RESULT: 403 downgrade_refused" in result.stdout, result.stdout
+
+    after = get_json(f"{CLOUD}/stats")["pqc"]["handshakes_downgrade_refused"]
+    assert after == before + 1, "the refusal was not counted"
 
 
 @requires_docker

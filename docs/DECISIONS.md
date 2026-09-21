@@ -281,3 +281,223 @@ Full treatment in `docs/TESTING.md` §5. The ones that matter:
 3. That Decision 11's weakness-asserting tests are understood by the whole group
    before anyone "fixes" hop 1.
 4. Set up CI (W16). The fast suite is 7 s; there is no reason it is not automatic.
+
+---
+
+## 2026-09-21 — Hybrid post-quantum key establishment on hop 2
+
+### What was done
+
+Hop 2 (gateway → cloud) now does hybrid **X25519 + ML-KEM-768** key
+establishment with suite negotiation, three-layer downgrade protection, and
+per-direction key separation. Hop 1 is untouched and classical, by design.
+
+- `services/common/suites.py` (new) — suite IDs, `Policy`, `negotiate()`.
+- `services/common/handshake.py` — `wx-hybrid/2` transcripts and `hop2_v2_derive`.
+- `services/common/cryptoutil.py` — X25519 and ML-KEM-768 wrappers.
+- `services/cloud/main.py` — protocol dispatch, negotiation, policy enforcement.
+- `services/gateway/cloud_client.py` — offers suites, verifies, enforces policy.
+- `scripts/demo_phases.py` (new) — runs each migration phase.
+- `docs/MIGRATION.md` (new) — phases, sunset criteria, trust-boundary risks.
+
+**Full design, including all 20 security assumptions, was reviewed and approved
+before implementation.**
+
+### Decision 12 — Library: pyca/cryptography, pinned to 50.0.1
+
+Compared three candidates by installing them:
+
+| | pyca/cryptography | liboqs-python | PQClean wrappers |
+|---|---|---|---|
+| Install | binary wheel, ~10 s | **failed** — CMake-builds liboqs at import | build toolchain |
+| Docker cost | none, already a dependency | cmake+ninja+gcc+git, source fetch at build | toolchain |
+| Maintenance | 50.0.1 (2026-08-25), wheels ship OpenSSL 4.0.2 | active (OQS / PQCA) | thinner |
+| FIPS 140-3 validated | **no** | **no** | **no** |
+
+Chosen because it is already our only crypto dependency — one audit surface,
+one CVE feed — and adds zero Docker build complexity. ML-KEM arrived in 48.0.0
+(OpenSSL >= 3.5 backend; 47.0.0 was AWS-LC/BoringSSL only) and the
+implementation is OpenSSL's.
+
+*liboqs would win* if we needed agility across many PQC schemes. We need one KEM.
+
+**Version pinned exactly.** Bumping 45.0.7 to 50.0.1 was done as a separate
+first commit with the full suite as the gate: **200/200 fast tests and 9/9
+Docker tests passed with no code changes.** No breakage to report.
+
+*Verify independently:* the version and provenance claims above come from
+upstream release notes and a local install; the reviewer asked to check them.
+
+### Decision 13 — Hybrid construction: ML-KEM secret first
+
+```
+IKM  = ss_mlkem768 || ss_x25519
+salt = client_nonce || server_nonce
+info = lp(protocol, hop, selected_suite, client_id, offered_suites,
+          nonces, both x25519 pubkeys, mlkem_ek, mlkem_ct, direction_label)
+```
+
+Order is not arbitrary: NIST SP 800-56C Rev2 permits HKDF over two shared
+secrets **provided the FIPS-approved one leads**. TLS's `X25519MLKEM768` orders
+it identically. Matching a construction with real scrutiny beats inventing one.
+
+Asserted by `test_hybrid_ikm_puts_mlkem_first` — swapping the halves must change
+the key, otherwise the ordering is not actually part of the construction.
+
+### Decision 14 — Roles: gateway generates, cloud encapsulates
+
+The gateway sends the encapsulation key; the cloud encapsulates to it. Same
+direction as TLS 1.3 `key_share`, and it puts the expensive keygen on the edge
+rather than on the shared cloud service.
+
+### Decision 15 — Three-layer downgrade protection
+
+1. **Signature** — the gateway signs its whole offer; the cloud signs the full
+   transcript *including that offer*. Editing `offered_suites` in flight breaks
+   both.
+2. **KDF binding** — the offer list is in the HKDF info, so a mismatch yields
+   different keys and fails at the AEAD.
+3. **Policy** — `PQC_POLICY` in {`require`, `prefer`, `classical-only`}.
+   Defaults: cloud `require`, gateway `prefer`. Classical selection is *never*
+   silent: WARNING log plus `handshakes_classical` counter plus `pqc_fraction`
+   on `/stats`. `classical-only` logs a startup banner.
+
+Enforced on **both** ends: a gateway on `require` refuses a correctly signed
+classical ServerHello, because either peer may be the one that was rolled back.
+
+**Layers 1 and 2 rest on ECDSA and are therefore not post-quantum.** Only
+layer 3 survives a CRQC. See the next entry.
+
+### Decision 16 — ECDSA's weakness: active attacks only (per review feedback)
+
+Stated precisely, because it is easy to over- or under-claim:
+
+- **Recorded hybrid traffic stays confidential.** Session keys come from
+  `ss_mlkem768 || ss_x25519`; breaking ECDSA reveals neither. An attacker who
+  captures hop 2 traffic today and gets a CRQC later must still break
+  ML-KEM-768. **HNDL protection on hop 2 is real and holds.**
+- **ECDSA's weakness enables ACTIVE attacks, and only once a CRQC exists** —
+  real-time impersonation, MITM, and forced downgrade, all requiring the
+  attacker on-path *at handshake time* with a CRQC already in hand. None of this
+  retroactively decrypts anything.
+
+Even then, a cloud on `require` will not complete a classical session: a forged
+signature buys a refused handshake, not a downgraded one.
+
+Full treatment in `docs/MIGRATION.md` section 2. Residual risk: ML-DSA
+(FIPS 204) is out of scope (W3).
+
+### Decision 17 — Per-direction keys (per review feedback)
+
+`DirectionalSession` derives `key_c2s` and `key_s2c` from the same IKM with
+different direction labels (`gw->cloud`, `cloud->gw`) in the HKDF info.
+
+Both directions share a session id and nonce prefix, so a shared key would mean
+message N in each direction reused the same (key, nonce) pair — catastrophic for
+AES-GCM. Only `key_c2s` carries data today (responses are still plaintext, W5),
+but deriving both removes the failure mode instead of relying on the channel
+staying one-way by convention.
+
+**Hop 1 keeps a single key** and is documented and enforced as strictly one-way:
+`test_hop1_is_strictly_one_way` asserts the gateway's responses are plaintext.
+If encrypted responses are ever added there, `DerivedSession` must become
+directional first.
+
+### Correction — assumption 7 was based on a flawed probe
+
+The pre-implementation design listed as an open assumption that
+`MLKEM768PublicKey.from_public_bytes` performs FIPS 203 input validation,
+citing as evidence that an **all-zero encapsulation key was accepted**.
+
+**That evidence was wrong, and the reviewer was right to reject it.** An
+all-zero ek is a *valid* encoding: every 12-bit coefficient is 0, which is
+< q = 3329, so it must be accepted. It tested nothing.
+
+The correct test is the FIPS 203 section 7.2 modulus check — a coefficient >= q
+does not survive `ByteDecode12`/`ByteEncode12` round-tripping. Re-probed:
+
+| Encapsulation key | Result |
+|---|---|
+| all zeros (coeffs = 0) | **accepted** — valid, as it should be |
+| first coeff = 3328 (q-1) | **accepted** |
+| first coeff = 3329 (= q) | **REJECTED** |
+| all 0xFF (coeffs = 4095) | **REJECTED** |
+
+The check is enforced, exactly at the q boundary. **Assumption 7 is now
+verified rather than assumed**, and is locked in by
+`test_encapsulation_key_with_coefficient_at_or_above_q_is_rejected`.
+
+Lesson recorded deliberately: a negative test that cannot fail proves nothing,
+and "the library accepted my malformed input" is worthless if the input was not
+actually malformed.
+
+*Note:* the library reports a modulus-check failure as `"An ML-KEM-768 public
+key is 1184 bytes long"` even when the input *is* 1184 bytes. Misleading
+upstream message; we wrap it in `InvalidEncapsulationKey` and never surface it.
+
+### Decision 18 — Implicit rejection is load-bearing, and tested as such
+
+FIPS 203 section 7.3: decapsulating a tampered ciphertext **does not fail**. It
+returns a different pseudorandom secret, because distinguishing valid from
+invalid ciphertexts would break IND-CCA security. **Verified empirically.**
+
+Consequence: a tampered ML-KEM ciphertext surfaces as an **AEAD tag failure on
+the first message**, never as a decapsulation exception. Code or tests expecting
+an exception are wrong — this is the classic ML-KEM integration bug.
+
+Both defence layers are tested separately:
+
+- `test_tampered_mlkem_ciphertext_in_transit_fails_the_signature_first` — in the
+  real protocol the ServerHello signature catches it *before* decapsulation.
+- `test_tampered_mlkem_ciphertext_causes_aead_tag_failure` — bypasses the
+  signature to isolate ML-KEM's own behaviour, which matters because the outer
+  layer is ECDSA and a CRQC can forge it.
+
+### Decision 19 — `classical-p256` fallback keeps P-256, not X25519
+
+The fallback *is* the Phase-2 baseline, so the benchmark comparison isolates the
+cost of adding ML-KEM and nothing else. Approved at review.
+
+### Measured cost (Phase 2 to Phase 4)
+
+300 iterations, in-process, same machine. Full table in
+`results/pqc-hybrid-latest.md`.
+
+| | Classical | Hybrid | Delta |
+|---|---:|---:|---:|
+| hop 2 key establishment (crypto only) | 0.746 ms | 1.158 ms | **+55%** |
+| hop 2 handshake bytes | 710 B | 3959 B | **+458%** |
+| hop 1 key establishment (control) | 0.092 ms | 0.082 ms | -11% (noise) |
+| per-message size | 416 B | 416 B | **0%** |
+
+The per-message row is the invariant that matters: **ML-KEM establishes a key
+and never touches the payload**, as `CLAUDE.md` requires.
+
+**Read the latency rows with care.** The hop 1 control row moved -11% despite
+nothing changing, which is how much run-to-run noise the in-process round-trip
+measurements carry. Only the crypto-only and byte-count rows are trustworthy at
+this sample size; the round-trip figures are dominated by ASGI and JSON.
+
+### Known weaknesses
+
+- ECDSA remains quantum-broken (W3). Downgrade protection layers 1-2 fall with it.
+- Hop 1 is still classical; the **system as a whole is not post-quantum**.
+- Hybrid handshakes are trivially fingerprintable by size (~4 KB vs ~700 B).
+- No FIPS 140-3 validated implementation is in use.
+- Sunset criterion 3 (device inventory) cannot currently be satisfied — no
+  firmware-version reporting exists. Blocks Phase 4.
+- `SessionStore` concurrency remains untested (carried over).
+
+### What a human must verify
+
+1. **The library version and provenance claims** in Decision 12 — the reviewer
+   asked to check these independently.
+2. That the transcript definitions in `handshake.py` match `ARCHITECTURE.md`
+   section 4. A mismatch between what is signed and what is used is how this
+   class of protocol breaks.
+3. That Decision 13's IKM ordering matches SP 800-56C Rev2 as you read it.
+4. That the ECDSA framing in Decision 16 and `MIGRATION.md` section 2 is neither
+   overstated nor understated for the final report.
+5. Re-run `scripts/benchmark.py --compare` on the machine that will produce the
+   report's numbers; cross-machine comparison is meaningless.
+

@@ -3,15 +3,18 @@
 The "before" measurement for the PQC migration. Every number here was produced
 by running the suite, not estimated.
 
-**Status:** 209 tests, all passing. 91% line coverage on `services/`.
+**Status:** 275 tests, all passing. 92% line coverage on `services/`.
+
+Covers the classical baseline **and** the hybrid post-quantum hop 2. PQC-specific
+tests live in `tests/test_pqc.py`; see §2.5.
 
 ---
 
 ## 1. How to run
 
 ```bash
-pytest                          # 200 fast tests (~7 s), no Docker
-pytest -m docker                # 9 integration tests against real containers (~60 s)
+pytest                          # 264 fast tests (~7 s), no Docker
+pytest -m docker                # 11 integration tests against real containers (~60 s)
 pytest -m ""                    # everything
 pytest --cov=services --cov-report=term-missing
 python scripts/benchmark.py     # writes results/
@@ -27,14 +30,15 @@ unavailable rather than failing.
 
 | Module | Tests | Focus |
 |---|---:|---|
-| `test_negative.py` | 89 | hostile input on both hops — rejected, not crashed |
+| `test_negative.py` | 94 | hostile input on both hops — rejected, not crashed |
+| `test_pqc.py` | 59 | hybrid PQC: handshake, negotiation, downgrade, rotation |
 | `test_config.py` | 40 | env parsing, device startup |
 | `test_weather.py` | 26 | two-block CSV parsing, validation bounds |
 | `test_crypto.py` | 21 | ECDH/ECDSA/HKDF wrappers, AEAD framing |
 | `test_sessions.py` | 13 | session lifetime, rekeying, log hygiene |
 | `test_end_to_end.py` | 11 | in-process device → gateway → cloud |
-| `test_docker_integration.py` | 9 | the real docker-compose stack |
-| **Total** | **209** | 200 fast + 9 Docker |
+| `test_docker_integration.py` | 11 | the real docker-compose stack |
+| **Total** | **275** | 264 fast + 11 Docker |
 
 ### 2.1 Parsing and validation
 
@@ -105,6 +109,67 @@ Two levels, deliberately:
   volume and not in image layers, that the gateway's ingest port is **not**
   published to the host, and one tamper case executed inside the network.
 
+### 2.5 Hybrid post-quantum (hop 2)
+
+`tests/test_pqc.py`. The six behaviours the design has to get right:
+
+**1. Hybrid handshake succeeds.** Both sides derive matching keys; data flows;
+`pqc_fraction` reaches 1.0. Plus three structural properties: the IKM puts the
+ML-KEM secret first (swapping the halves must change the key), changing *either*
+half changes the key (so an attacker must break both), and the KDF binds the
+ML-KEM ciphertext and both public keys.
+
+**2. Tampered ML-KEM ciphertext.** Tested at both defence layers, because they
+fail differently and the inner one is the subtle part:
+
+- *Outer* — in the real protocol the ServerHello signature covers the
+  ciphertext, so tampering in flight fails verification before decapsulation
+  ever runs.
+- *Inner* — bypassing the signature to isolate ML-KEM itself:
+  **decapsulation does not raise**. FIPS 203 §7.3 implicit rejection returns a
+  *different pseudorandom secret*, and the failure surfaces as an **AEAD tag
+  failure** on the first message. A test asserting an exception here would be
+  wrong, and this is the classic ML-KEM integration bug.
+
+  This layering matters because the outer defence is ECDSA, which a CRQC can
+  forge; the inner one still holds.
+
+**3. Encapsulation-key validation (FIPS 203 §7.2).** The modulus check is
+verified at the q boundary: coefficient 3328 accepted, 3329 rejected, all-0xFF
+rejected — and **all-zeros accepted**, because that is a *valid* encoding.
+
+> An earlier probe used "all-zeros was accepted" as evidence that validation was
+> missing. That was wrong: all-zeros must be accepted, so the probe tested
+> nothing. A negative test that cannot fail proves nothing. Recorded in
+> DECISIONS.md because the mistake is instructive.
+
+**4. Version and suite negotiation.** Both protocol versions are served; unknown
+versions rejected; unknown suite names ignored rather than refused (forward
+compatibility); a legacy `wx-legacy/1` gateway still works under `prefer` and is
+refused under `require`.
+
+**5. Downgrade protection**, all three layers independently:
+
+| Attack | Defence | Result |
+|---|---|---|
+| Strip `hybrid` from `offered_suites` | signature over the offer | 403, signature fails |
+| Reorder `offered_suites` | signature | 403 |
+| Genuine classical-only offer | policy | 403 `downgrade_refused`, counted |
+| Classical under `prefer` | logged + counted | 200, never silent |
+| Signed classical ServerHello, gateway on `require` | client-side policy | refused |
+| Cloud selects a suite we never offered | client-side check | refused |
+
+**6. Key rotation and direction separation.** A fresh ML-KEM keypair every
+handshake (5 handshakes → 5 distinct encapsulation keys and ciphertexts); the
+record budget forces rekeys; rotated sessions have distinct keys; no ephemeral
+private key is retained on the client after the handshake.
+
+Direction separation: `key_c2s != key_s2c` for both suites, sending on the wrong
+direction key is rejected with `bad_tag`, and separation comes from the KDF
+label rather than from distinct nonce prefixes. Hop 1 keeps one key and
+`test_hop1_is_strictly_one_way` asserts its responses are plaintext — if that
+ever changes, `DerivedSession` must become directional first.
+
 ---
 
 ## 3. Coverage
@@ -112,21 +177,26 @@ Two levels, deliberately:
 ```
 Name                                Stmts   Miss  Cover
 -----------------------------------------------------------------
-services/cloud/main.py                136      3    98%
+services/cloud/main.py                251     17    93%
 services/cloud/storage.py              42      3    93%
 services/common/config.py              39      0   100%
-services/common/cryptoutil.py          99      5    95%
-services/common/handshake.py           24      0   100%
-services/common/sessions.py            60      1    98%
+services/common/cryptoutil.py         141      5    96%
+services/common/handshake.py           73      1    99%
+services/common/sessions.py            61      1    98%
+services/common/suites.py              52      0   100%
 services/common/weather.py            136      1    99%
-services/common/wire.py                29      2    93%
+services/common/wire.py                33      2    94%
 services/device/gateway_client.py      72      8    89%
 services/device/main.py                64     39    39%
-services/gateway/cloud_client.py       84     12    86%
-services/gateway/main.py              124     11    91%
+services/gateway/cloud_client.py      148     13    91%
+services/gateway/main.py              127     12    91%
 -----------------------------------------------------------------
-TOTAL                                 909     85    91%
+TOTAL                                1239    102    92%
 ```
+
+The PQC work added ~330 statements and coverage went **up**, from 91% to 92%.
+`suites.py` — negotiation and policy, the downgrade-protection logic — is at
+100%.
 
 **Important caveat:** this is measured on the fast suite only. Coverage is not
 collected inside containers, so the Docker tests contribute nothing to these
@@ -150,9 +220,17 @@ network-error branches in the two client classes.
 
 `python scripts/benchmark.py` writes three files to `results/`:
 
-- `legacy-baseline-<timestamp>.json` — archived run
-- `legacy-baseline-latest.json` — stable name for diffing after PQC
-- `legacy-baseline-latest.md` — human-readable summary
+- `<label>-<timestamp>.json` — archived run
+- `<label>-latest.json` — stable name for diffing
+- `<label>-latest.md` — human-readable summary
+
+`--compare <baseline.json>` adds a before/after table. The Phase 2 → Phase 4
+comparison was produced with:
+
+```bash
+python scripts/benchmark.py --label pqc-hybrid \
+    --compare results/phase2-classical-baseline.json
+```
 
 Three layers, because they answer different questions:
 
@@ -202,18 +280,42 @@ serialisation, not cryptography — note that hop 1 key establishment is 0.09 ms
 inside a 4.8 ms handshake. **Absolute values are not production latencies.**
 The delta is the deliverable.
 
-### 4.3 What to expect after ML-KEM
+### 4.3 Result after ML-KEM — the predictions held
 
-ML-KEM-768 changes the handshake, not the message path:
+The Phase-2 prediction was: hop 2 handshake grows by roughly 3 KB after base64,
+hop 1 unchanged, per-message unchanged. Measured (`results/pqc-hybrid-latest.md`,
+300 iterations, same machine):
 
-- **hop 2 handshake should grow**, in both latency and size. An ML-KEM-768
-  encapsulation key is 1184 B and a ciphertext 1088 B, against 65 B for a P-256
-  public key — roughly +2.2 KB before base64, ~3 KB after.
-- **hop 1 should be unchanged.** The device is non-upgradeable.
-- **Per-message latency and size should be unchanged.** The KEM establishes a
-  key and never touches the payload. **If per-message numbers move, something is
-  wrong** — most likely ML-KEM being misused to encrypt data, which
-  `CLAUDE.md` forbids.
+| Measurement | Classical | Hybrid | Delta |
+|---|---:|---:|---:|
+| hop 2 key establishment (crypto only) | 0.746 ms | 1.158 ms | **+55%** |
+| hop 2 ClientHello | 316 B | 2095 B | +563% |
+| hop 2 ServerHello | 394 B | 1864 B | +373% |
+| **hop 2 handshake total** | **710 B** | **3959 B** | **+458%** |
+| hop 1 handshake total (control) | 310 B | 310 B | 0% |
+| hop 1 key establishment (control) | 0.092 ms | 0.082 ms | −11% |
+| **reading plaintext** | **233 B** | **233 B** | **0%** |
+| **reading ciphertext + tag** | **249 B** | **249 B** | **0%** |
+| **ingest frame on the wire** | **416 B** | **416 B** | **0%** |
+
+The +3249 B growth matches the prediction: ek 1184 B + ct 1088 B = 2272 B raw,
+≈3029 B base64'd, plus the suite list and second key share.
+
+**The per-message rows are the invariant that matters.** All exactly 0% — ML-KEM
+establishes a key and never touches the payload, as `CLAUDE.md` requires. Any
+movement there would mean the KEM had leaked onto the data path.
+
+#### Read the latency rows sceptically
+
+**The hop 1 control row moved −11% despite nothing about hop 1 changing.** That
+is pure run-to-run noise, and it is the honest measure of how much the
+in-process round-trip figures can drift between runs. The same applies to the
+round-trip latencies, which are dominated by ASGI and JSON rather than crypto.
+
+Trustworthy at this sample size: the **crypto-only** latencies and the **byte
+counts** (which are deterministic). Treat the round-trip numbers as indicative
+only, and re-measure both sides on one machine in one sitting before quoting
+them.
 
 ---
 

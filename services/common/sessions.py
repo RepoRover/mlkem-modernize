@@ -34,6 +34,10 @@ class ServerSession:
     max_records: int
     accepted: int = 0
     created_at: datetime = field(default_factory=utc_now)
+    #: Negotiated suite, so logs and metrics can show whether the data that
+    #: arrived on this session was protected post-quantum or not. Hop 1 has no
+    #: negotiation and reports its fixed legacy suite.
+    suite: str = "classical-p256"
 
     def is_expired(self, now: datetime | None = None) -> bool:
         now = now or utc_now()

@@ -47,15 +47,25 @@ sys.path.insert(0, str(ROOT))
 
 from services.common import cryptoutil as cu  # noqa: E402
 from services.common.handshake import (  # noqa: E402
+    KeyShare,
     hop1_derive,
     hop2_client_transcript,
     hop2_derive,
     hop2_server_transcript,
+    hop2_v2_client_transcript,
+    hop2_v2_derive,
+    hop2_v2_server_transcript,
 )
-from services.common.wire import b64e  # noqa: E402
+from services.common.suites import SUITE_CLASSICAL, SUITE_HYBRID, Policy  # noqa: E402
+from services.common.wire import PROTOCOL_V2, b64e  # noqa: E402
 
 DEVICE_ID = "device-berlin-01"
 GATEWAY_ID = "gw-01"
+
+
+def _cryptography_version() -> str:
+    import cryptography
+    return cryptography.__version__
 
 SAMPLE_READING = {
     "device_id": DEVICE_ID,
@@ -124,6 +134,18 @@ def bench_primitives(iterations: int) -> dict[str, Any]:
     sender = cu.AeadSender(key, b"s" * 16, b"p" * 4)
     _, nonce, ciphertext = cu.AeadSender(key, b"s" * 16, b"p" * 4).encrypt(plaintext)
 
+    # X25519 -- the classical half of the hybrid.
+    x_a = cu.generate_x25519_private_key()
+    x_b = cu.generate_x25519_private_key()
+    x_b_pub = x_b.public_key()
+    x_b_raw = cu.x25519_public_bytes(x_b_pub)
+
+    # ML-KEM-768 -- the post-quantum half.
+    kem_priv = cu.generate_mlkem768_private_key()
+    kem_pub = kem_priv.public_key()
+    kem_ek = cu.mlkem768_encapsulation_key_bytes(kem_priv)
+    _, kem_ct = cu.mlkem768_encapsulate(kem_pub)
+
     results = {
         "ec_keygen_p256": measure(cu.generate_private_key, iterations),
         "ecdh_p256": measure(lambda: cu.ecdh(static_a, pub_b), iterations),
@@ -133,6 +155,18 @@ def bench_primitives(iterations: int) -> dict[str, Any]:
         "pubkey_encode": measure(lambda: cu.public_key_to_bytes(pub_b), iterations),
         "pubkey_decode": measure(lambda: cu.public_key_from_bytes(pub_b_raw), iterations),
         "aes256gcm_encrypt_reading": measure(lambda: sender.encrypt(plaintext), iterations),
+        # --- post-quantum additions ---
+        "x25519_keygen": measure(cu.generate_x25519_private_key, iterations),
+        "x25519_exchange": measure(lambda: cu.x25519_exchange(x_a, x_b_pub), iterations),
+        "x25519_pubkey_decode": measure(
+            lambda: cu.x25519_public_from_bytes(x_b_raw), iterations),
+        "mlkem768_keygen": measure(cu.generate_mlkem768_private_key, iterations),
+        "mlkem768_ek_parse_and_validate": measure(
+            lambda: cu.mlkem768_encapsulation_key_from_bytes(kem_ek), iterations),
+        "mlkem768_encapsulate": measure(
+            lambda: cu.mlkem768_encapsulate(kem_pub), iterations),
+        "mlkem768_decapsulate": measure(
+            lambda: cu.mlkem768_decapsulate(kem_priv, kem_ct), iterations),
     }
 
     # Decrypt needs a fresh receiver each time because the counter must advance.
@@ -165,11 +199,17 @@ def build_stack(keys_dir: Path):
     # loggers afterwards or a 200-iteration run prints thousands of lines --
     # and the logging itself would land inside the measured window.
     for name in ("bench", "gateway", "cloud", "device"):
-        logging.getLogger(name).setLevel(logging.WARNING)
+        # ERROR, not WARNING: the classical-suite measurements legitimately log
+        # a downgrade warning on every one of hundreds of iterations, which
+        # would bury the benchmark's own output.
+        logging.getLogger(name).setLevel(logging.ERROR)
     logging.getLogger().setLevel(logging.WARNING)
 
+    # PREFER on both sides so the benchmark can exercise the hybrid path and
+    # the classical fallback from the same stack.
     cloud_app = create_cloud_app(
-        keys_dir=str(keys_dir), db_path=":memory:", max_records=10**9
+        keys_dir=str(keys_dir), db_path=":memory:", max_records=10**9,
+        policy=Policy.PREFER,
     )
     cloud_http = TestClient(cloud_app, base_url="http://cloud")
     cloud_client = CloudClient(
@@ -179,12 +219,14 @@ def build_stack(keys_dir: Path):
         cloud_public_key=cu.load_public_key(keys_dir / "cloud_ecdsa_pub.pem"),
         log=log,
         http_client=cloud_http,
+        policy=Policy.PREFER,
     )
     gateway_app = create_gateway_app(
         keys_dir=str(keys_dir),
         cloud_url="http://cloud",
         max_records=10**9,
         cloud_client=cloud_client,
+        policy=Policy.PREFER,
     )
     gateway_http = TestClient(gateway_app, base_url="http://gateway")
     device = GatewayClient(
@@ -247,9 +289,70 @@ def bench_key_establishment(keys_dir: Path, iterations: int) -> dict[str, Any]:
                     client_nonce, server_nonce, client_eph_pub, server_eph_pub,
                     session_id, prefix)
 
+    def hop2_hybrid_full() -> None:
+        """The post-quantum replacement, both sides, crypto only.
+
+        Client: X25519 keygen + ML-KEM keygen + sign + verify + X25519 + decap.
+        Server: verify + ek validate + encap + X25519 keygen + X25519 + sign.
+        This is the number that should grow relative to hop2_full.
+        """
+        client_nonce = cu.random_bytes(16)
+        # --- client key shares ---
+        client_x = cu.generate_x25519_private_key()
+        client_x_pub = cu.x25519_public_bytes(client_x.public_key())
+        client_kem = cu.generate_mlkem768_private_key()
+        client_ek = cu.mlkem768_encapsulation_key_bytes(client_kem)
+
+        offered = [SUITE_HYBRID]
+        shares = {SUITE_HYBRID: KeyShare(x25519_pub=client_x_pub, mlkem768_ek=client_ek)}
+        sig_c = cu.sign(gateway_sign, hop2_v2_client_transcript(
+            GATEWAY_ID, client_nonce, offered, shares))
+
+        # --- server side ---
+        assert cu.verify(gateway_verify, sig_c, hop2_v2_client_transcript(
+            GATEWAY_ID, client_nonce, offered, shares))
+        peer_ek = cu.mlkem768_encapsulation_key_from_bytes(client_ek)
+        ss_mlkem_server, mlkem_ct = cu.mlkem768_encapsulate(peer_ek)
+        server_x = cu.generate_x25519_private_key()
+        server_x_pub = cu.x25519_public_bytes(server_x.public_key())
+        ss_x_server = cu.x25519_exchange(
+            server_x, cu.x25519_public_from_bytes(client_x_pub))
+
+        server_nonce = cu.random_bytes(16)
+        session_id = cu.random_bytes(16)
+        prefix = cu.random_bytes(4)
+        expires = "2026-09-21T10:05:00Z"
+        server_share = KeyShare(x25519_pub=server_x_pub)
+        transcript = hop2_v2_server_transcript(
+            client_id=GATEWAY_ID, client_nonce=client_nonce, offered_suites=offered,
+            client_shares=shares, selected_suite=SUITE_HYBRID, session_id=session_id,
+            server_nonce=server_nonce, server_share=server_share,
+            mlkem768_ct=mlkem_ct, nonce_prefix=prefix, expires_at=expires,
+            max_records=100)
+        sig_s = cu.sign(cloud_sign, transcript)
+        hop2_v2_derive(
+            selected_suite=SUITE_HYBRID, ss_mlkem768=ss_mlkem_server,
+            ss_classical=ss_x_server, client_id=GATEWAY_ID, offered_suites=offered,
+            client_nonce=client_nonce, server_nonce=server_nonce,
+            client_share=shares[SUITE_HYBRID], server_share=server_share,
+            mlkem768_ct=mlkem_ct, session_id=session_id, nonce_prefix=prefix)
+
+        # --- client completes ---
+        assert cu.verify(cloud_verify, sig_s, transcript)
+        ss_mlkem_client = cu.mlkem768_decapsulate(client_kem, mlkem_ct)
+        ss_x_client = cu.x25519_exchange(
+            client_x, cu.x25519_public_from_bytes(server_x_pub))
+        hop2_v2_derive(
+            selected_suite=SUITE_HYBRID, ss_mlkem768=ss_mlkem_client,
+            ss_classical=ss_x_client, client_id=GATEWAY_ID, offered_suites=offered,
+            client_nonce=client_nonce, server_nonce=server_nonce,
+            client_share=shares[SUITE_HYBRID], server_share=server_share,
+            mlkem768_ct=mlkem_ct, session_id=session_id, nonce_prefix=prefix)
+
     return {
         "hop1_static_static_ecdh": measure(hop1_full, iterations),
         "hop2_ephemeral_ecdhe_mutual_ecdsa": measure(hop2_full, iterations),
+        "hop2_hybrid_x25519_mlkem768": measure(hop2_hybrid_full, iterations),
     }
 
 
@@ -263,10 +366,30 @@ def bench_protocol(keys_dir: Path, iterations: int) -> dict[str, Any]:
     def hop2_handshake() -> None:
         cloud_client.handshake()
 
+    # Separate clients so each measures one suite only.
+    from services.gateway.cloud_client import CloudClient as _CC
+
+    def make_client(policy: Policy) -> "_CC":
+        return _CC(
+            base_url="http://cloud", gateway_id=GATEWAY_ID,
+            signing_key=cu.load_private_key(keys_dir / "gateway_ecdsa_priv.pem"),
+            cloud_public_key=cu.load_public_key(keys_dir / "cloud_ecdsa_pub.pem"),
+            log=logging.getLogger("bench"), http_client=cloud_http, policy=policy,
+        )
+
+    hybrid_client = make_client(Policy.REQUIRE)
+    classical_client = make_client(Policy.CLASSICAL_ONLY)
+
     handshakes = {
         "hop1_handshake_roundtrip": measure(hop1_handshake, max(iterations // 5, 20)),
         "hop2_handshake_roundtrip": measure(hop2_handshake, max(iterations // 5, 20)),
+        "hop2_v2_hybrid_handshake_roundtrip": measure(
+            hybrid_client.handshake, max(iterations // 5, 20)),
+        "hop2_v2_classical_handshake_roundtrip": measure(
+            classical_client.handshake, max(iterations // 5, 20)),
     }
+    # Deliberately NOT closed: these clients share the injected `cloud_http`
+    # transport with the gateway's own client, so closing one closes it for all.
 
     # --- per-message, device -> gateway -> cloud (both hops, end to end) ---
     device.handshake()
@@ -380,6 +503,50 @@ def bench_sizes(keys_dir: Path) -> dict[str, Any]:
     _, _, envelope_ct = cu.AeadSender(key, cu.random_bytes(16),
                                       cu.random_bytes(4)).encrypt(envelope)
 
+    # --- hop 2 v2 hybrid handshake, real serialised sizes ---
+    x_pub = cu.x25519_public_bytes(cu.generate_x25519_private_key().public_key())
+    kem_priv = cu.generate_mlkem768_private_key()
+    ek = cu.mlkem768_encapsulation_key_bytes(kem_priv)
+    _, kem_ct = cu.mlkem768_encapsulate(kem_priv.public_key())
+
+    v2_hybrid_hello = json.dumps({
+        "protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": GATEWAY_ID,
+        "client_nonce": b64e(cu.random_bytes(16)),
+        "offered_suites": [SUITE_HYBRID, SUITE_CLASSICAL],
+        "key_shares": {
+            SUITE_HYBRID: {"x25519_pub": b64e(x_pub), "mlkem768_ek": b64e(ek)},
+            SUITE_CLASSICAL: {"eph_pub": b64e(eph_pub)},
+        },
+        "sig": b64e(sig),
+    }, separators=(",", ":")).encode()
+
+    v2_hybrid_server = json.dumps({
+        "protocol": PROTOCOL_V2, "selected_suite": SUITE_HYBRID,
+        "session_id": b64e(cu.random_bytes(16)),
+        "server_nonce": b64e(cu.random_bytes(16)),
+        "nonce_prefix": b64e(cu.random_bytes(4)),
+        "expires_at": "2026-09-21T10:05:00Z", "max_records": 100,
+        "sig": b64e(sig),
+        "x25519_pub": b64e(x_pub), "mlkem768_ct": b64e(kem_ct),
+    }, separators=(",", ":")).encode()
+
+    v2_classical_hello = json.dumps({
+        "protocol": PROTOCOL_V2, "hop": "gateway-cloud", "client_id": GATEWAY_ID,
+        "client_nonce": b64e(cu.random_bytes(16)),
+        "offered_suites": [SUITE_CLASSICAL],
+        "key_shares": {SUITE_CLASSICAL: {"eph_pub": b64e(eph_pub)}},
+        "sig": b64e(sig),
+    }, separators=(",", ":")).encode()
+
+    v2_classical_server = json.dumps({
+        "protocol": PROTOCOL_V2, "selected_suite": SUITE_CLASSICAL,
+        "session_id": b64e(cu.random_bytes(16)),
+        "server_nonce": b64e(cu.random_bytes(16)),
+        "nonce_prefix": b64e(cu.random_bytes(4)),
+        "expires_at": "2026-09-21T10:05:00Z", "max_records": 100,
+        "sig": b64e(sig), "eph_pub": b64e(eph_pub),
+    }, separators=(",", ":")).encode()
+
     return {
         "cryptographic_elements_bytes": {
             "p256_public_key_x962_uncompressed": len(eph_pub),
@@ -389,6 +556,10 @@ def bench_sizes(keys_dir: Path) -> dict[str, Any]:
             "aead_nonce": cu.NONCE_LEN,
             "aead_tag": 16,
             "session_key": cu.SESSION_KEY_LEN,
+            "x25519_public_key": cu.X25519_PUBLIC_LEN,
+            "mlkem768_encapsulation_key": cu.MLKEM768_EK_LEN,
+            "mlkem768_ciphertext": cu.MLKEM768_CT_LEN,
+            "mlkem768_shared_secret": cu.MLKEM768_SS_LEN,
         },
         "handshake_bytes": {
             "hop1_client_hello": len(hop1_hello),
@@ -397,6 +568,12 @@ def bench_sizes(keys_dir: Path) -> dict[str, Any]:
             "hop2_client_hello": len(hop2_hello),
             "hop2_server_hello": len(hop2_server),
             "hop2_total": len(hop2_hello) + len(hop2_server),
+            "hop2_v2_hybrid_client_hello": len(v2_hybrid_hello),
+            "hop2_v2_hybrid_server_hello": len(v2_hybrid_server),
+            "hop2_v2_hybrid_total": len(v2_hybrid_hello) + len(v2_hybrid_server),
+            "hop2_v2_classical_client_hello": len(v2_classical_hello),
+            "hop2_v2_classical_server_hello": len(v2_classical_server),
+            "hop2_v2_classical_total": len(v2_classical_hello) + len(v2_classical_server),
         },
         "message_bytes": {
             "reading_plaintext_json": len(reading_json),
@@ -418,6 +595,119 @@ def bench_sizes(keys_dir: Path) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # reporting
 # --------------------------------------------------------------------------
+
+
+def _delta(before: float, after: float) -> str:
+    """Signed percentage change, or 'n/a' when the baseline is zero."""
+    if before == 0:
+        return "n/a"
+    change = (after - before) / before * 100.0
+    sign = "+" if change >= 0 else ""
+    return f"{sign}{change:.1f}%"
+
+
+def render_comparison(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """Phase 2 vs Phase 4: what adding ML-KEM-768 actually cost.
+
+    Compares like with like. The classical rows should barely move -- if they
+    do, the measurement is noisy or something unrelated changed. The hybrid
+    rows are the answer to 'what did PQC cost us'.
+    """
+    lines = [
+        "## Before / after: adding ML-KEM-768",
+        "",
+        f"Baseline `{before['metadata']['label']}` "
+        f"({before['metadata']['timestamp']}) vs "
+        f"`{after['metadata']['label']}` ({after['metadata']['timestamp']}).",
+        "",
+        "### Handshake latency (median, ms)",
+        "",
+        "| measurement | classical (before) | hybrid (after) | delta |",
+        "|---|---:|---:|---:|",
+    ]
+
+    def latency_of(blob: dict[str, Any], section: str, key: str) -> float | None:
+        if section == "key_establishment":
+            table = blob.get("key_establishment", {})
+        else:
+            table = blob.get("protocol", {}).get(section, {})
+        entry = table.get(key)
+        return entry["median_ms"] if entry else None
+
+    rows = [
+        ("hop 2 key establishment (crypto only)",
+         ("key_establishment", "hop2_ephemeral_ecdhe_mutual_ecdsa"),
+         ("key_establishment", "hop2_hybrid_x25519_mlkem768")),
+        ("hop 2 handshake round trip",
+         ("handshakes", "hop2_handshake_roundtrip"),
+         ("handshakes", "hop2_v2_hybrid_handshake_roundtrip")),
+        ("hop 1 key establishment (unchanged)",
+         ("key_establishment", "hop1_static_static_ecdh"),
+         ("key_establishment", "hop1_static_static_ecdh")),
+        ("per-message, both hops (unchanged)",
+         ("messages", "end_to_end_reading_both_hops"),
+         ("messages", "end_to_end_reading_both_hops")),
+    ]
+    for label, (b_section, b_key), (a_section, a_key) in rows:
+        b_val = latency_of(before, b_section, b_key)
+        a_val = latency_of(after, a_section, a_key)
+        if b_val is None or a_val is None:
+            continue
+        lines.append(f"| {label} | {b_val:.4f} | {a_val:.4f} | {_delta(b_val, a_val)} |")
+
+    lines.extend([
+        "",
+        "### Handshake size (bytes on the wire)",
+        "",
+        "| measurement | classical (before) | hybrid (after) | delta |",
+        "|---|---:|---:|---:|",
+    ])
+    b_sizes = before.get("sizes", {}).get("handshake_bytes", {})
+    a_sizes = after.get("sizes", {}).get("handshake_bytes", {})
+    size_rows = [
+        ("hop 2 ClientHello", "hop2_client_hello", "hop2_v2_hybrid_client_hello"),
+        ("hop 2 ServerHello", "hop2_server_hello", "hop2_v2_hybrid_server_hello"),
+        ("hop 2 handshake total", "hop2_total", "hop2_v2_hybrid_total"),
+        ("hop 1 handshake total (unchanged)", "hop1_total", "hop1_total"),
+    ]
+    for label, b_key, a_key in size_rows:
+        b_val, a_val = b_sizes.get(b_key), a_sizes.get(a_key)
+        if b_val is None or a_val is None:
+            continue
+        lines.append(f"| {label} | {b_val} | {a_val} | {_delta(b_val, a_val)} |")
+
+    b_msg = before.get("sizes", {}).get("message_bytes", {})
+    a_msg = after.get("sizes", {}).get("message_bytes", {})
+    lines.extend([
+        "",
+        "### Per-message size (must be unchanged)",
+        "",
+        "| measurement | before | after | delta |",
+        "|---|---:|---:|---:|",
+    ])
+    for label, key in [
+        ("reading plaintext", "reading_plaintext_json"),
+        ("reading ciphertext + tag", "reading_ciphertext_with_tag"),
+        ("ingest frame on the wire", "hop1_ingest_frame_on_wire"),
+    ]:
+        b_val, a_val = b_msg.get(key), a_msg.get(key)
+        if b_val is None or a_val is None:
+            continue
+        lines.append(f"| {label} | {b_val} | {a_val} | {_delta(b_val, a_val)} |")
+
+    lines.extend([
+        "",
+        "**Reading this table.** ML-KEM establishes a key; it never touches the "
+        "payload. So the handshake rows are expected to grow and the per-message "
+        "rows are expected to be identical. A non-zero delta in the per-message "
+        "section means the KEM has leaked onto the data path, which "
+        "`CLAUDE.md` forbids.",
+        "",
+        "Hop 1 rows are a control: the device is non-upgradeable, so any movement "
+        "there is measurement noise rather than a real change.",
+        "",
+    ])
+    return lines
 
 
 def render_markdown(results: dict[str, Any]) -> str:
@@ -460,6 +750,11 @@ def render_markdown(results: dict[str, Any]) -> str:
             lines.append(f"| `{name}` | {value} |")
     lines.append("")
 
+    # --- before/after comparison, if a baseline was supplied -----------------
+    baseline = results.get("_baseline")
+    if baseline:
+        lines.extend(render_comparison(baseline, results))
+
     ov = sizes["overhead"]
     lines.extend([
         "### Overhead",
@@ -496,6 +791,8 @@ def main() -> int:
                         help="name for this run, used in the filename and report")
     parser.add_argument("--skip-protocol", action="store_true",
                         help="primitives and sizes only (fast)")
+    parser.add_argument("--compare", metavar="BASELINE.json",
+                        help="a previous results file to produce a before/after table against")
     args = parser.parse_args()
 
     keys_dir = Path(args.keys_dir)
@@ -503,6 +800,16 @@ def main() -> int:
         print(f"error: no keys in {keys_dir.resolve()}", file=sys.stderr)
         print("  run: python scripts/gen_keys.py --out keys", file=sys.stderr)
         return 1
+
+    baseline = None
+    if args.compare:
+        baseline_path = Path(args.compare)
+        if not baseline_path.exists():
+            print(f"error: baseline {baseline_path} not found", file=sys.stderr)
+            return 1
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        print(f"comparing against {baseline_path} "
+              f"({baseline['metadata']['label']})")
 
     logging.getLogger().setLevel(logging.WARNING)
     timestamp = datetime.now(timezone.utc)
@@ -529,8 +836,12 @@ def main() -> int:
         "metadata": {
             "label": args.label,
             "timestamp": timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "suite": "ECDH-P256 / ECDSA-P256 / HKDF-SHA256 / AES-256-GCM",
-            "pqc": False,
+            "suite": (
+                "hop2 hybrid: X25519 + ML-KEM-768 / ECDSA-P256 / HKDF-SHA256 / "
+                "AES-256-GCM; hop1 + fallback: ECDH-P256"
+            ),
+            "pqc": True,
+            "cryptography_version": _cryptography_version(),
             "iterations": args.iterations,
             "mode": "in-process (no network)",
             "python": platform.python_version(),
@@ -542,6 +853,10 @@ def main() -> int:
         "protocol": protocol,
         "sizes": sizes,
     }
+    if baseline is not None:
+        # Only used for rendering; stripped before the JSON is written so the
+        # results file stays a clean single-run record.
+        results["_baseline"] = baseline
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -565,11 +880,16 @@ def main() -> int:
     msg = protocol["messages"].get("end_to_end_reading_both_hops")
     print("\nheadline numbers (median):")
     print(f"  hop 1 key establishment   {ke['hop1_static_static_ecdh']['median_ms']:.4f} ms")
-    print(f"  hop 2 key establishment   "
+    print(f"  hop 2 classical           "
           f"{ke['hop2_ephemeral_ecdhe_mutual_ecdsa']['median_ms']:.4f} ms")
+    print(f"  hop 2 HYBRID (PQC)        "
+          f"{ke['hop2_hybrid_x25519_mlkem768']['median_ms']:.4f} ms")
     if msg:
         print(f"  reading, both hops        {msg['median_ms']:.4f} ms")
     print(f"  wire/plaintext ratio      {sizes['overhead']['wire_to_plaintext_ratio']}x")
+    hb = sizes["handshake_bytes"]
+    print(f"  hop 2 handshake bytes     {hb['hop2_total']} classical -> "
+          f"{hb['hop2_v2_hybrid_total']} hybrid")
     return 0
 
 

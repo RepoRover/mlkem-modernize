@@ -1,16 +1,26 @@
-"""Classical (pre-quantum) crypto primitives for the legacy baseline.
+"""Crypto primitives, classical and post-quantum.
 
 Everything here is a thin wrapper over `cryptography`. No primitive is
 implemented by hand. This module is the ONLY place that touches key material.
 
-Suite (baseline / "before" state):
+Classical (hop 1, and the hop 2 `classical-p256` fallback):
   - key agreement : ECDH over NIST P-256
   - signatures    : ECDSA over NIST P-256 with SHA-256
+
+Post-quantum (hop 2 `hybrid-x25519-mlkem768`):
+  - key agreement : X25519 ECDHE  +  ML-KEM-768 (FIPS 203)
+
+Shared by both:
   - KDF           : HKDF-SHA256
   - AEAD          : AES-256-GCM
 
-All of the above except AES-GCM is broken by a cryptographically relevant
-quantum computer. That is the point of this file: it is the thing we migrate.
+ECDH, X25519 and ECDSA all fall to Shor. ML-KEM does not, which is why the
+hybrid combines it with X25519 rather than replacing X25519 outright: the
+result is secure if EITHER component holds.
+
+ML-KEM comes from `cryptography` >= 48 backed by OpenSSL >= 3.5. We pin the
+exact version in requirements.txt because this module is the whole crypto
+surface of the system.
 """
 
 from __future__ import annotations
@@ -20,7 +30,7 @@ from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, mlkem, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
@@ -33,6 +43,17 @@ NONCE_PREFIX_LEN = 4
 NONCE_LEN = 12  # 4-byte per-session prefix + 8-byte counter
 HANDSHAKE_NONCE_LEN = 16
 SESSION_ID_LEN = 16
+
+# X25519 (RFC 7748)
+X25519_PUBLIC_LEN = 32
+X25519_SHARED_LEN = 32
+
+# ML-KEM-768 (FIPS 203). Sizes are fixed by the standard and asserted at import
+# time below, so a library change that altered them fails loudly and early.
+MLKEM768_EK_LEN = 1184  # encapsulation key ("public key")
+MLKEM768_CT_LEN = 1088  # ciphertext
+MLKEM768_SS_LEN = 32  # shared secret
+MLKEM768_SEED_LEN = 64  # d||z seed; how cryptography serialises the private key
 
 
 # --------------------------------------------------------------------------
@@ -128,6 +149,153 @@ def verify(public_key: ec.EllipticCurvePublicKey, signature: bytes, message: byt
 
 def random_bytes(n: int) -> bytes:
     return os.urandom(n)
+
+
+# --------------------------------------------------------------------------
+# X25519 (the classical half of the hybrid)
+# --------------------------------------------------------------------------
+
+
+def generate_x25519_private_key() -> x25519.X25519PrivateKey:
+    return x25519.X25519PrivateKey.generate()
+
+
+def x25519_public_bytes(key: x25519.X25519PublicKey) -> bytes:
+    return key.public_bytes_raw()
+
+
+def x25519_public_from_bytes(raw: bytes) -> x25519.X25519PublicKey:
+    """Parse a 32-byte X25519 public key.
+
+    X25519 has no invalid-curve problem the way P-256 does -- every 32-byte
+    string is a valid input -- so the only check is the length. Note that some
+    inputs (low-order points) produce an all-zero shared secret; see
+    `x25519_exchange`.
+    """
+    if len(raw) != X25519_PUBLIC_LEN:
+        raise ValueError(f"X25519 public key must be {X25519_PUBLIC_LEN} bytes")
+    return x25519.X25519PublicKey.from_public_bytes(raw)
+
+
+def x25519_exchange(
+    private_key: x25519.X25519PrivateKey, peer_public: x25519.X25519PublicKey
+) -> bytes:
+    """X25519 key agreement.
+
+    `cryptography` raises on an all-zero output, which is the low-order-point
+    case RFC 7748 section 6.1 tells implementations to reject. We let that
+    propagate: the handshake must fail, not continue with a degenerate secret.
+    """
+    shared = private_key.exchange(peer_public)
+    if len(shared) != X25519_SHARED_LEN:  # pragma: no cover - defensive
+        raise ValueError("unexpected X25519 shared secret length")
+    return shared
+
+
+# --------------------------------------------------------------------------
+# ML-KEM-768 (FIPS 203) -- the post-quantum half of the hybrid
+# --------------------------------------------------------------------------
+
+
+class InvalidEncapsulationKey(ValueError):
+    """Peer sent an encapsulation key that is not a valid ML-KEM-768 key.
+
+    Raised for both a wrong length and a failed FIPS 203 input check. We use our
+    own message rather than the library's, because the library reports a modulus
+    -check failure as "An ML-KEM-768 public key is 1184 bytes long", which is
+    confusing when the input is in fact 1184 bytes.
+    """
+
+
+def generate_mlkem768_private_key() -> mlkem.MLKEM768PrivateKey:
+    """Fresh ML-KEM-768 decapsulation key.
+
+    Generated per handshake and discarded afterwards. Reusing it across
+    sessions would forfeit forward secrecy on the post-quantum half.
+    """
+    return mlkem.MLKEM768PrivateKey.generate()
+
+
+def mlkem768_encapsulation_key_bytes(private_key: mlkem.MLKEM768PrivateKey) -> bytes:
+    return private_key.public_key().public_bytes_raw()
+
+
+def mlkem768_encapsulation_key_from_bytes(raw: bytes) -> mlkem.MLKEM768PublicKey:
+    """Parse and validate a peer's encapsulation key.
+
+    FIPS 203 section 7.2 requires two input checks on `ek`: the length check, and the
+    "modulus check" -- ByteDecode12 followed by ByteEncode12 must round-trip,
+    which rejects any 12-bit coefficient >= q = 3329.
+
+    Both are performed by the library and verified by our tests:
+    an all-zero key is ACCEPTED (every coefficient is 0, a legal encoding),
+    a key whose first coefficient is 3328 is ACCEPTED, and one whose first
+    coefficient is 3329 is REJECTED. See tests/test_pqc.py.
+    """
+    if len(raw) != MLKEM768_EK_LEN:
+        raise InvalidEncapsulationKey(
+            f"encapsulation key must be {MLKEM768_EK_LEN} bytes, got {len(raw)}"
+        )
+    try:
+        return mlkem.MLKEM768PublicKey.from_public_bytes(raw)
+    except ValueError as exc:
+        raise InvalidEncapsulationKey("encapsulation key failed FIPS 203 input check") from exc
+
+
+def mlkem768_encapsulate(public_key: mlkem.MLKEM768PublicKey) -> tuple[bytes, bytes]:
+    """Encapsulate to a peer's key.
+
+    Returns (shared_secret, ciphertext) in that order.
+
+    NOTE the order: `cryptography` returns the SHARED SECRET FIRST. Swapping
+    these silently produces a 1088-byte "secret" and a 32-byte "ciphertext",
+    which then fails far away from the cause. This wrapper exists partly to
+    make that mistake impossible to make twice.
+    """
+    shared_secret, ciphertext = public_key.encapsulate()
+    if len(shared_secret) != MLKEM768_SS_LEN or len(ciphertext) != MLKEM768_CT_LEN:
+        raise ValueError("unexpected ML-KEM-768 encapsulation output size")  # pragma: no cover
+    return shared_secret, ciphertext
+
+
+def mlkem768_decapsulate(private_key: mlkem.MLKEM768PrivateKey, ciphertext: bytes) -> bytes:
+    """Decapsulate a ciphertext.
+
+    IMPLICIT REJECTION (FIPS 203 section 7.3). A well-formed but tampered ciphertext
+    does NOT raise. It returns a *different, pseudorandom* shared secret, by
+    design -- distinguishing valid from invalid ciphertexts would break IND-CCA
+    security. Verified empirically; see tests/test_pqc.py.
+
+    The practical consequence for callers: a tampered ML-KEM ciphertext is
+    detected downstream as an AEAD tag failure on the first message, NOT as an
+    exception here. Code that expects decapsulation to raise on tampering is
+    wrong, and so is a test that asserts it.
+
+    A ciphertext of the wrong LENGTH does raise, and that we surface.
+    """
+    if len(ciphertext) != MLKEM768_CT_LEN:
+        raise ValueError(
+            f"ML-KEM-768 ciphertext must be {MLKEM768_CT_LEN} bytes, got {len(ciphertext)}"
+        )
+    return private_key.decapsulate(ciphertext)
+
+
+def _self_check() -> None:
+    """Fail at import if the library's ML-KEM parameters are not what we expect.
+
+    Cheap (one keygen + one encapsulation) and it turns a silent parameter
+    change in a dependency upgrade into an immediate, obvious startup failure.
+    """
+    private_key = generate_mlkem768_private_key()
+    ek = mlkem768_encapsulation_key_bytes(private_key)
+    if len(ek) != MLKEM768_EK_LEN:  # pragma: no cover - defensive
+        raise RuntimeError(f"ML-KEM-768 ek is {len(ek)} bytes, expected {MLKEM768_EK_LEN}")
+    shared, ciphertext = mlkem768_encapsulate(private_key.public_key())
+    if mlkem768_decapsulate(private_key, ciphertext) != shared:  # pragma: no cover
+        raise RuntimeError("ML-KEM-768 round trip failed")
+
+
+_self_check()
 
 
 # --------------------------------------------------------------------------

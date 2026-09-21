@@ -1,12 +1,25 @@
-# Architecture — Legacy Baseline ("before" state)
+# Architecture
 
-This document describes the **pre-PQC** weather telemetry system: a simulated
-legacy device, an edge gateway, and a cloud service. Every cryptographic choice
-here is classical, and most of them are broken by a cryptographically relevant
-quantum computer. That is intentional — this is the state we migrate *from*.
+Weather telemetry: a simulated legacy device, an edge gateway, and a cloud
+service.
 
-**Status:** working end to end. Not production software. Do not copy the hop 1
-design into anything new.
+**Status:** hop 2 (gateway → cloud) does **hybrid post-quantum** key
+establishment with X25519 + ML-KEM-768. Hop 1 (device → gateway) is still
+classical, because the device is non-upgradeable by premise.
+
+> **The system as a whole is not post-quantum secure.** Hop 2 is. Traffic
+> recorded on hop 1 today remains decryptable by a future quantum computer.
+> See [MIGRATION.md](MIGRATION.md) for exactly what is and is not protected.
+
+Not production software. Do not copy the hop 1 design into anything new.
+
+| Section | Covers |
+|---|---|
+| §1–2 | components, and why the hops differ |
+| §3–4 | message formats and handshake sequences (hop 1, hop 2 v1, hop 2 v2) |
+| §5 | suite negotiation, PQC policy, downgrade protection |
+| §6–8 | sessions, data flow, read API |
+| §9–10 | weaknesses (W1–W20) and what humans must verify |
 
 ---
 
@@ -19,7 +32,7 @@ flowchart LR
     end
 
     subgraph dmz["Edge"]
-        GW["<b>Edge gateway</b><br/>services/gateway<br/>validates + re-encrypts<br/><i>PQC starts here later</i>"]
+        GW["<b>Edge gateway</b><br/>services/gateway<br/>validates + re-encrypts<br/><i>PQC starts here</i>"]
     end
 
     subgraph cloudzone["Cloud"]
@@ -29,8 +42,8 @@ flowchart LR
 
     OPS(["Operator / API consumer"])
 
-    DEV -- "hop 1 — HTTP + AES-256-GCM<br/><b>static-static ECDH P-256</b><br/>no forward secrecy" --> GW
-    GW  -- "hop 2 — HTTP + AES-256-GCM<br/><b>ephemeral ECDHE P-256 + mutual ECDSA</b><br/>forward secrecy" --> CLD
+    DEV -- "hop 1 — HTTP + AES-256-GCM<br/><b>static-static ECDH P-256</b><br/>CLASSICAL · no forward secrecy" --> GW
+    GW  -- "hop 2 — HTTP + AES-256-GCM<br/><b>X25519 + ML-KEM-768</b> + mutual ECDSA<br/>POST-QUANTUM · forward secrecy" --> CLD
     CLD --> DB
     OPS -- "GET /readings (no auth)" --> CLD
 
@@ -42,11 +55,14 @@ flowchart LR
     class DB,OPS neutral
 ```
 
-| Component | Role | Crypto | Upgradeable? |
-|---|---|---|---|
-| `services/device` | Replays 366 daily readings | static-static ECDH P-256 + AES-256-GCM | **No** — treated as frozen firmware |
-| `services/gateway` | Validates, re-encrypts, forwards | hop 1 server + hop 2 client | Yes |
-| `services/cloud` | Validates, stores, serves read API | hop 2 server | Yes |
+| Component | Role | Key establishment | Post-quantum? | Upgradeable? |
+|---|---|---|---|---|
+| `services/device` | Replays 366 daily readings | static-static ECDH P-256 | **No** | **No** — frozen firmware |
+| `services/gateway` | Validates, re-encrypts, forwards | hop 1 server + hop 2 client | hop 2 only | Yes |
+| `services/cloud` | Validates, stores, serves read API | hop 2 server | Yes | Yes |
+
+Authentication on both hops is **ECDSA P-256**, which is *not* post-quantum.
+That is a deliberate, recorded limitation — see §5.3 and W3.
 
 The gateway is a **decrypt/re-encrypt point**. Plaintext readings exist in its
 memory. This is not end-to-end confidentiality — and it is precisely what makes
@@ -56,26 +72,36 @@ a staged PQC migration possible, because the device never has to change.
 
 ## 2. Why the two hops differ
 
-This is the central design decision of the baseline.
+This is the central design decision of the system, and it is what made the
+migration possible without touching the device.
 
 | | Hop 1 (device → gateway) | Hop 2 (gateway → cloud) |
 |---|---|---|
-| Key agreement | static-static ECDH P-256 | **ephemeral-ephemeral** ECDH P-256 |
-| Forward secrecy | **none** | yes |
+| Protocol | `wx-legacy/1` | `wx-hybrid/2` (`wx-legacy/1` still accepted) |
+| Key agreement | static-static ECDH P-256 | **X25519 + ML-KEM-768** |
+| **Post-quantum** | **no** | **yes** |
+| Forward secrecy | **none** | yes (fresh ephemerals both halves) |
 | Client auth | implicit (static ECDH key *is* the identity) | explicit (ECDSA P-256 signature) |
-| Server auth | implicit (pinned static key) | **explicit** (ECDSA signature over transcript) |
+| Server auth | implicit (pinned static key) | **explicit** (ECDSA over full transcript) |
 | ServerHello authenticated | **no** | yes |
-| KDF transcript binding | nonces only — **public keys not bound** | full transcript |
+| Suite negotiation | none | yes, with downgrade protection |
+| KDF transcript binding | nonces only — **public keys not bound** | full transcript + offer list |
+| Keys per session | one (strictly one-way) | **two** (one per direction) |
 | AEAD | AES-256-GCM | AES-256-GCM |
 
-**Hop 1 is deliberately cruftier.** It models non-upgradeable firmware honestly:
-a key burned in at manufacture, no ephemerals, no signatures, no negotiation.
-Every session between this device and this gateway derives from the *same* ECDH
-shared secret `Z`; only the HKDF salt varies.
+**Hop 1 is deliberately cruftier and is frozen.** It models non-upgradeable
+firmware honestly: a key burned in at manufacture, no ephemerals, no signatures,
+no negotiation. Every session between this device and this gateway derives from
+the *same* ECDH shared secret `Z`; only the HKDF salt varies.
 
-**Hop 2 is a clean classical baseline.** It is the closest classical analogue of
-what replaces it, so the before/after comparison isolates the cost of adding
-ML-KEM-768 and nothing else.
+**Hop 2 was built as a clean classical baseline precisely so that ML-KEM could
+be dropped into it.** The migration changed one derivation function and the two
+handshake messages. Hop 1, the device, the AEAD framing, validation, storage and
+the read API did not move — which is why the before/after benchmark isolates the
+cost of the KEM and nothing else.
+
+The classical fallback suite `classical-p256` *is* the old hop 2, kept so the
+comparison stays honest and so Phase 1 of the migration is demonstrable.
 
 ---
 
@@ -121,7 +147,11 @@ public key, and only the genuine device can derive the matching session key.
 without checking anything, and only discovers a wrong gateway when its first
 message comes back with a tag failure.
 
-### 3.3 Hop 2 — ClientHello (`POST /handshake` on the cloud)
+> **§3.3 and §3.4 describe `wx-legacy/1`, the pre-PQC hop 2 handshake.** It is
+> still accepted for backwards compatibility but is refused under
+> `PQC_POLICY=require`. The current protocol is §4.3.
+
+### 3.3 Hop 2 v1 (legacy) — ClientHello (`POST /handshake` on the cloud)
 
 ```json
 {
@@ -141,7 +171,7 @@ lp( "wx-legacy/1", "gateway-cloud", "client-hello",
     client_id, client_nonce, eph_pub )
 ```
 
-### 3.4 Hop 2 — ServerHello
+### 3.4 Hop 2 v1 (legacy) — ServerHello
 
 ```json
 {
@@ -312,22 +342,139 @@ sequenceDiagram
     Note over G,C: budget or TTL exhausted → new ClientHello
 ```
 
-### 4.3 The migration delta
+### 4.3 Hop 2 v2 — hybrid X25519 + ML-KEM-768 (`wx-hybrid/2`)
 
-Only `hop2_derive` and the hop 2 ClientHello/ServerHello change:
+The current hop 2 protocol. `wx-legacy/1` (§4.2) is still accepted, so an
+un-upgraded gateway keeps working — but under `PQC_POLICY=require` it is refused
+as a downgrade.
 
+**ClientHello** — offers every suite it can do, with a key share for each, so
+negotiation costs no extra round trip:
+
+```json
+{ "protocol": "wx-hybrid/2", "hop": "gateway-cloud", "client_id": "gw-01",
+  "client_nonce": "<b64 16B>",
+  "offered_suites": ["hybrid-x25519-mlkem768", "classical-p256"],
+  "key_shares": {
+    "hybrid-x25519-mlkem768": { "x25519_pub": "<b64 32B>",
+                                "mlkem768_ek": "<b64 1184B>" },
+    "classical-p256":         { "eph_pub": "<b64 65B>" }
+  },
+  "sig": "<b64 ECDSA-P256 over protocol, hop, client_id, nonce,
+           offered_suites AND every key share>" }
 ```
-  ikm  = Z_ecdh                    →   ikm  = Z_x25519 ‖ ss_mlkem768
-  info = lp(..., eph_pubs, nonces) →   info = lp(..., eph_pubs, nonces,
-                                                  mlkem_pubkey, mlkem_ciphertext)
+
+**ServerHello:**
+
+```json
+{ "protocol": "wx-hybrid/2", "selected_suite": "hybrid-x25519-mlkem768",
+  "session_id": "<b64 16B>", "server_nonce": "<b64 16B>",
+  "x25519_pub": "<b64 32B>", "mlkem768_ct": "<b64 1088B>",
+  "nonce_prefix": "<b64 4B>", "expires_at": "...", "max_records": 100,
+  "sig": "<b64 ECDSA-P256 over the FULL transcript, including the client's
+           offered_suites and key shares>" }
 ```
 
-Hop 1, the device, the AEAD framing, validation, storage and the read API do not
-move. That is the point of splitting the hops this way.
+For `classical-p256` the server returns `eph_pub` instead of
+`x25519_pub`/`mlkem768_ct`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant G as Edge gateway
+    participant C as Cloud service
+
+    Note over G: generate FRESH X25519 keypair<br/>generate FRESH ML-KEM-768 keypair
+    G->>C: ClientHello { offered_suites, key_shares, sig }
+
+    Note over C: 1. parse<br/>2. VERIFY sig over the whole offer<br/>3. apply PQC_POLICY -> select suite<br/>4. only now do key agreement
+    rect rgb(253, 232, 232)
+        Note over C: policy=require + no hybrid offered<br/>→ 403 downgrade_refused, logged + counted
+    end
+
+    Note over C: validate ek (FIPS 203 length + modulus check)<br/>ss_mlkem, ct = ML-KEM-768.Encap(ek)<br/>ss_x = X25519(server_eph, client_x25519)
+    C-->>G: ServerHello { selected_suite, x25519_pub,<br/>mlkem768_ct, sig }
+
+    rect rgb(230, 244, 234)
+        Note over G: VERIFY sig over the FULL transcript<br/>→ a stripped/reordered offer fails here<br/>→ a tampered mlkem768_ct fails here
+    end
+    Note over G: ss_mlkem = ML-KEM-768.Decap(dk, ct)<br/>ss_x = X25519(client_eph, server_x25519)
+    rect rgb(255, 250, 230)
+        Note over G: Decap IMPLICITLY REJECTS: a tampered ct<br/>does NOT raise, it returns a different secret.<br/>Detection happens at the AEAD.
+    end
+
+    Note over G,C: IKM  = ss_mlkem768 ‖ ss_x25519   (ML-KEM FIRST)<br/>salt = client_nonce ‖ server_nonce<br/>info = lp(protocol, hop, selected_suite, client_id,<br/>          offered_suites, nonces, both x25519 pubs,<br/>          mlkem_ek, mlkem_ct, DIRECTION)
+    Note over G,C: K_c2s = HKDF(..., "gw->cloud")<br/>K_s2c = HKDF(..., "cloud->gw")
+
+    loop seq = 0 .. max_records-1
+        G->>C: Ingest { session_id, seq, nonce, ct }  [K_c2s]
+        C-->>G: { status, seq } (plaintext)
+    end
+```
+
+**Why ML-KEM's secret comes first.** NIST SP 800-56C Rev2 permits HKDF over two
+shared secrets provided the FIPS-approved one leads. TLS's `X25519MLKEM768`
+orders it the same way.
+
+**Why two keys.** Both directions share a session id and nonce prefix, so a
+single key would mean message N in each direction reused the same (key, nonce)
+pair — catastrophic for AES-GCM. Only `K_c2s` carries data today; `K_s2c` is
+derived so a future encrypted response cannot reuse the sending key.
+
+**Sizes.** The hybrid handshake is 3959 B against 710 B classical (+458%). The
+per-message frame is **unchanged at 416 B** — ML-KEM establishes a key and never
+touches the payload, as `CLAUDE.md` requires.
 
 ---
 
-## 5. Session lifetime and rekeying
+## 5. Suite negotiation and downgrade protection
+
+### 5.1 Suites and policy
+
+| Suite ID | Key establishment | Post-quantum? |
+|---|---|---|
+| `hybrid-x25519-mlkem768` | X25519 ECDHE + ML-KEM-768 | **Yes** |
+| `classical-p256` | P-256 ECDHE | No |
+
+`PQC_POLICY`, set independently on each service:
+
+| Value | Behaviour | Default |
+|---|---|---|
+| `require` | Hybrid only. Classical-only peers get `403 downgrade_refused`. | **cloud** |
+| `prefer` | Hybrid if possible; classical logged at WARNING and counted. | **gateway** |
+| `classical-only` | Explicit opt-out. Logs a startup banner. | — |
+
+Visible on `GET /stats` as `pqc.handshakes_hybrid`, `pqc.handshakes_classical`,
+`pqc.handshakes_downgrade_refused` and `pqc.pqc_fraction`.
+
+### 5.2 Three layers
+
+1. **Signature.** The gateway signs its whole offer; the cloud signs the full
+   transcript including that offer. Stripping or reordering `offered_suites`
+   breaks both signatures.
+2. **KDF binding.** `offered_suites` and `selected_suite` are in the HKDF info,
+   so a mismatch yields different keys and fails at the AEAD.
+3. **Policy.** The cloud simply refuses. Enforced on both ends — a gateway on
+   `require` rejects a correctly signed classical ServerHello, because either
+   peer may be the one that was rolled back.
+
+### 5.3 The limitation, stated precisely
+
+Layers 1 and 2 rest on **ECDSA P-256, which is quantum-broken**. Therefore:
+
+- **Recorded hybrid traffic stays confidential.** Session keys come from
+  `ss_mlkem768 ‖ ss_x25519`; forging ECDSA reveals neither. Harvest-now-
+  decrypt-later protection on hop 2 **holds**.
+- **ECDSA's weakness enables ACTIVE attacks only, and only once a CRQC exists** —
+  real-time impersonation, MITM and forced downgrade, all requiring the attacker
+  on-path *at handshake time*. None of it decrypts anything recorded earlier.
+
+Only layer 3 survives a CRQC: a forged signature buys a *refused* handshake, not
+a downgraded one. Full treatment in [MIGRATION.md](MIGRATION.md) §2.
+
+---
+
+## 6. Session lifetime and rekeying
 
 A session is the scope of one AEAD key. It ends at whichever comes first:
 
@@ -344,12 +491,25 @@ Rekeying bounds how much data one derived key protects. On hop 1 it does **not**
 bound the damage from a compromised static key, because every session key is
 recomputable from `Z` plus the nonces, which travel in the clear.
 
+**Ephemeral key rotation on hop 2** is the property that matters for the PQC
+path: a **fresh ML-KEM-768 keypair and a fresh X25519 keypair per handshake**,
+discarded immediately afterwards. Reusing either across sessions would forfeit
+forward secrecy on that half. Asserted by
+`test_every_handshake_uses_a_fresh_mlkem_keypair`.
+
+The session budget was deliberately left at 100 records / 600 s rather than
+shortened, so the before/after benchmark compares like with like. Hybrid
+handshakes cost ~3.2 KB more, amortised to roughly 32 bytes per reading at that
+budget — negligible here, but a real consideration on a constrained link.
+
+Long-term ECDSA keys still have no rotation path (W11, unchanged).
+
 Counter exhaustion is not a practical concern: the 8-byte counter allows 2⁶⁴
 messages per session against a budget of 100.
 
 ---
 
-## 6. Data flow and validation
+## 7. Data flow and validation
 
 `data/weather_data.csv` is an Open-Meteo daily export with **two CSV blocks**
 separated by a blank line — a station block and a record block. Handing the whole
@@ -377,7 +537,7 @@ it, which is what we want because the device loops over the same year.
 
 ---
 
-## 7. Read API
+## 8. Read API
 
 Unauthenticated (W9). Published on `127.0.0.1:8000` only.
 
@@ -390,40 +550,56 @@ Unauthenticated (W9). Published on `127.0.0.1:8000` only.
 
 ---
 
-## 8. Weaknesses of this baseline
+## 9. Weaknesses
 
 The reason the system exists. Ordered by how much they matter.
 
 ### Quantum exposure
 
-- **W1 — Both hops fall to Shor's algorithm.** ECDH P-256 *and* ECDSA P-256 are
-  broken by a cryptographically relevant quantum computer. Every handshake in
-  this system is quantum-vulnerable.
-- **W2 — Harvest-now-decrypt-later, and hop 1 is catastrophic.** Recorded traffic
-  can be decrypted retroactively once a CRQC exists. On hop 1 this is far worse
-  than usual: because the ECDH is static-static, recovering *one* private key
-  yields `Z`, and `Z` plus the cleartext nonces yields **every session key the
-  device has ever used**. Hop 2's ephemerals limit the damage to sessions whose
-  ephemeral keys are individually attacked.
-- **W3 — Signatures are not migrated either.** Replacing the KEM fixes
-  confidentiality, not authentication. ECDSA P-256 remains quantum-broken, so a
-  future attacker could impersonate the gateway or the cloud. **ML-DSA
-  (FIPS 204) is out of scope for this project and is a stated remaining risk.**
+- **W1 — Hop 1 falls to Shor's algorithm.** ECDH P-256 is broken by a
+  cryptographically relevant quantum computer. Hop 2's *key establishment* is
+  now hybrid and resists this; hop 1's does not, and by premise cannot be
+  changed. **The system as a whole is therefore not post-quantum secure.**
+- **W2 — Harvest-now-decrypt-later on hop 1, and it is catastrophic there.**
+  Recorded hop 1 traffic can be decrypted retroactively once a CRQC exists.
+  Worse than usual: because the ECDH is static-static, recovering *one* private
+  key yields `Z`, and `Z` plus the cleartext nonces yields **every session key
+  that device has ever used**.
+  **Hop 2 is no longer exposed to this** — see W3 for the precise boundary.
+- **W3 — Signatures are not migrated; this enables ACTIVE attacks only.**
+  ECDSA P-256 remains quantum-broken. Stated precisely, because it is easy to
+  get wrong in both directions:
+  - *Recorded hybrid traffic stays confidential.* Hop 2 session keys come from
+    `ss_mlkem768 ‖ ss_x25519`; forging ECDSA reveals neither. HNDL protection on
+    hop 2 **holds**.
+  - *ECDSA's weakness enables real-time impersonation, MITM and forced
+    downgrade — and only once a CRQC exists*, with the attacker on-path at
+    handshake time. None of it retroactively decrypts anything.
+
+  **ML-DSA (FIPS 204) is out of scope and is the stated remaining risk.**
+  See [MIGRATION.md](MIGRATION.md) §2.
+- **W20 — Downgrade protection is only partly post-quantum.** Layers 1 and 2
+  (signature, KDF binding) rest on ECDSA and fall with it. Only the policy
+  layer (`PQC_POLICY=require`) survives a CRQC — a forged signature then buys a
+  *refused* handshake rather than a downgraded one. That is configuration, not
+  cryptography.
 
 ### Protocol design
 
 - **W4 — No forward secrecy on hop 1.** Compromise of either static key exposes
   all past and future traffic on that hop. Rekeying does not help.
-- **W5 — ServerHello and all responses are unauthenticated on hop 1**, and
-  responses are unauthenticated on both hops. An on-path attacker can forge
-  `accepted`, causing silent data loss, or forge `rejected`, causing the device
-  to discard good readings.
+- **W5 — ServerHello is unauthenticated on hop 1**, and *responses* are
+  unauthenticated on both hops. An on-path attacker can forge `accepted`,
+  causing silent data loss, or forge `rejected`, causing good readings to be
+  discarded. Hop 2 now derives a separate `key_s2c` so encrypted responses
+  could be added without reusing the sending key, but they are not implemented.
 - **W6 — Hop 1's KDF does not bind the public keys.** `info` is a fixed label and
   only the nonces are salted in, so the derived key does not commit to the
   identities involved. Asserted by a test so it cannot change unnoticed.
-- **W7 — No algorithm negotiation and no downgrade protection.** The `protocol`
-  field is trusted and, on hop 1, unauthenticated. There is no cipher-suite
-  agility at all, which is itself why this migration is hard.
+  Hop 2 v2 binds the full transcript *and* the offered suite list.
+- **W7 — Hop 1 has no algorithm negotiation and no downgrade protection.** Its
+  `protocol` field is trusted and unauthenticated. Hop 2 now has both (§5);
+  hop 1 cannot until the firmware changes, which is Phase 3.
 - **W8 — The cloud trusts the gateway's word.** `device_hop.verified` is an
   assertion. Readings are not signed by the device, so a compromised gateway can
   fabricate readings that the cloud accepts as device-authenticated.
@@ -435,7 +611,9 @@ The reason the system exists. Ordered by how much they matter.
 ### Transport and operations
 
 - **W10 — No TLS.** Metadata — device ids, message timing, message sizes — is in
-  the clear, and there is no protection against traffic analysis.
+  the clear, and there is no protection against traffic analysis. Hybrid
+  handshakes are now trivially **fingerprintable by size** (~4 KB vs ~700 B
+  classical), so an observer can tell which suite was negotiated.
 - **W11 — Key management is a placeholder.** Keys are unencrypted PEM files on a
   shared volume, generated by a container. No HSM or secure element, no
   attestation, no rotation path, no revocation. The device's pinned gateway key
@@ -451,8 +629,8 @@ The reason the system exists. Ordered by how much they matter.
 
 ### Testing and observability
 
-- **W16 — No CI.** 209 tests exist and pass, with 91% line coverage, but nothing
-  runs automatically on push. See `docs/TESTING.md`.
+- **W16 — No CI.** 267 tests exist and pass, but nothing runs automatically on
+  push. See `docs/TESTING.md`.
 - **W17 — ~~The Docker build and compose stack are unverified.~~ RESOLVED
   2026-09-21.** `docker compose up` builds and runs; all 366 readings flow
   device → gateway → cloud with zero rejections, verified by 9 integration tests
@@ -467,7 +645,7 @@ The reason the system exists. Ordered by how much they matter.
 
 ---
 
-## 9. What a human must verify
+## 10. What a human must verify
 
 Flagged explicitly, per the project's working rules.
 
