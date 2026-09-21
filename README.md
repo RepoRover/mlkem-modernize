@@ -17,6 +17,7 @@ classical, because the device is treated as non-upgradeable firmware.
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | components, message formats, handshake sequences, weaknesses W1–W20 |
 | [MIGRATION.md](docs/MIGRATION.md) | migration phases, sunset criteria, the gateway as trust boundary |
 | [TESTING.md](docs/TESTING.md) | test and measurement baseline, and what is hard to test |
+| [CICD.md](docs/CICD.md) | pipeline stages, what each catches, secrets handling, known gaps |
 | [DECISIONS.md](docs/DECISIONS.md) | every significant decision, with alternatives and known weaknesses |
 
 ## Crypto at a glance
@@ -72,6 +73,23 @@ Fallback to classical is never silent: it is logged, counted, and visible as
 CLOUD_PQC_POLICY=prefer GATEWAY_PQC_POLICY=prefer docker compose up --build
 ```
 
+### See what the backend actually does
+
+```bash
+python scripts/visualize_web.py          # local page on http://127.0.0.1:8420
+python scripts/visualize.py              # same thing in the terminal, 7 steps
+python scripts/visualize.py --step 3     # just the post-quantum handshake
+```
+
+Runs the real services in-process with every HTTP call tapped, and walks the
+data path: both handshakes, the key schedule, one reading travelling end to end,
+what gets rejected and why, and the resulting cloud state. Every byte count is
+measured from that run, not quoted from the docs.
+
+Both front-ends read the same `collect_trace()`, so they cannot disagree. The
+page also serves the raw measurements at `/api/trace`. It binds to 127.0.0.1
+only — it is a local diagnostic, not something to expose.
+
 ### See each migration phase
 
 ```bash
@@ -81,6 +99,39 @@ python scripts/demo_phases.py --phase 2a # the downgrade attack
 
 Runs the real services in-process and prints what actually happens at each
 phase — which suite is negotiated, what gets refused, what the metrics say.
+
+## CI/CD
+
+GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+Full rationale in [docs/CICD.md](docs/CICD.md).
+
+| Stage | Tool | Catches |
+|---|---|---|
+| Lint | ruff | unused code, import drift, naive datetimes, insecure patterns |
+| Type check | mypy | wrong types across same-shaped `bytes` parameters |
+| Static security | bandit | insecure primitives, shell injection, SQL concatenation |
+| Dependency scan | pip-audit | CVEs in the tree, including transitive |
+| Tests | pytest | regressions; **fails under 85% coverage** |
+| Build | buildx → GHCR | one SHA-tagged image for all three services |
+| Image scan | trivy | vulnerable OS/library packages in the image |
+| Integration | docker compose | keygen ordering, volumes, healthchecks, service DNS |
+| Deploy | kind | missing Secret, bad env, probe never ready, DNS |
+| Smoke test | `scripts/smoke_test.py` | **silent downgrade to classical** |
+
+Run the same gates locally:
+
+```bash
+ruff check . && mypy && bandit -c pyproject.toml -r services scripts -ll
+pip-audit -r requirements.txt
+pytest --cov=services --cov-report=term-missing
+python scripts/smoke_test.py --cloud-url http://127.0.0.1:8000
+```
+
+All tool configuration lives in `pyproject.toml`.
+
+**Secrets:** no key material is committed. CI generates ephemeral keys at deploy
+time into a Kubernetes Secret; they die with the cluster. Registry auth uses the
+per-run `GITHUB_TOKEN`.
 
 ## Run the tests
 
@@ -155,12 +206,20 @@ services/cloud/           hop 2 server + storage + read API
 scripts/gen_keys.py       development key generation
 scripts/benchmark.py      latency and message-size measurement
 scripts/demo_phases.py    migration phase demonstration
+scripts/visualize.py      step-by-step trace of the live data path (terminal)
+scripts/visualize_web.py  the same trace as a local web page
+scripts/smoke_test.py     post-deploy verification (asserts PQC, not just 200 OK)
+deploy/k8s/               Kubernetes manifests for the test environment
+.github/workflows/ci.yml  the CI/CD pipeline
+pyproject.toml            ruff / mypy / bandit / coverage configuration
 tests/                    275 tests (264 fast + 11 Docker)
 results/                  benchmark baselines (*-latest.* committed for comparison)
-docs/                     architecture, migration, testing, decision log
+docs/                     architecture, migration, testing, CI/CD, decision log
 ```
 
 ## Dependencies
+
+`pip-audit` runs on every build and weekly on a schedule.
 
 `cryptography` is **pinned exactly** (50.0.1). It is the only crypto dependency
 and now supplies ML-KEM-768 as well as X25519, ECDH, ECDSA, HKDF and AES-GCM, so

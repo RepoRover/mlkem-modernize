@@ -501,3 +501,232 @@ this sample size; the round-trip figures are dominated by ASGI and JSON.
 5. Re-run `scripts/benchmark.py --compare` on the machine that will produce the
    report's numbers; cross-machine comparison is meaningless.
 
+
+---
+
+## 2026-09-21 — CI/CD pipeline
+
+### What was done
+
+GitHub Actions pipeline in `.github/workflows/ci.yml`: lint, type check, static
+security analysis, dependency CVE scan, tests with a coverage gate, image build
+and push, container scan, compose integration, and a kind deployment with a
+post-deploy smoke test. Full stage-by-stage rationale in `docs/CICD.md`.
+
+New files: `.github/workflows/ci.yml`, `pyproject.toml` (all tool config),
+`deploy/k8s/*.yaml`, `scripts/smoke_test.py`, `docs/CICD.md`.
+
+Platform was not guessed: the repo's own remote is
+`github.com/RepoRover/mlkem-modernize`, so GitHub Actions it is.
+
+### Decision 20 — Gates are hard from day one, so the code was fixed first
+
+A pipeline whose gates are advisory is decoration. Rather than land the workflow
+with `continue-on-error` and a backlog, every existing finding was resolved
+before the gates went in:
+
+- **ruff:** 73 findings. 43 auto-fixed; the rest either fixed properly or given
+  *scoped* per-file ignores with a written reason.
+- **bandit:** 12 findings, each assessed individually (table in `docs/CICD.md`).
+  Five production `assert`s became explicit `raise`s — asserts are stripped under
+  `python -O`, so they were not actually enforcing anything in a `-O` deployment.
+- **mypy:** `services/` was already clean; tests and scripts were annotated until
+  all 32 files pass.
+
+*Alternative considered:* ship the workflow with warnings-only gates and fix
+later. Rejected — nobody fixes later, and a permanently-yellow pipeline teaches
+the team to ignore it.
+
+### Decision 21 — Coverage threshold: 85%
+
+Actual is ~91%. The 6-point gap is deliberate: `services/device/main.py` reads
+39% because its replay loop is exercised only by the Docker suite, where
+coverage is not collected. A gate pinned at 91% would fail correct changes for
+reasons unrelated to them; 85% still fails if a test module is deleted or a
+feature lands untested.
+
+*Alternative:* per-file thresholds. Rejected as premature for this size.
+
+### Decision 22 — One image for all three services
+
+`SERVICE` selects the module at runtime, so cloud/gateway/device are the same
+bytes with different env. Verified: all three modules import from a single built
+image. One thing to build, scan, sign and roll back.
+
+This also changed the k8s design for the better — no shared `keys` volume across
+pods (which would need ReadWriteMany), just a Secret each pod mounts.
+
+### Decision 23 — Deploy target: kind on the runner
+
+Chosen at review from three options (kind / compose-on-runner / SSH to a real
+host). kind gives a genuine deployment target — real Deployments, Services,
+probes, Secrets and rollout semantics — with no infrastructure to own and no
+long-lived credentials. The cluster is created and destroyed per run.
+
+*Rejected:* compose-on-the-runner (not really a deploy, just a second
+integration test); SSH to a test host (most realistic, but needs a machine the
+group maintains and a static SSH key in CI).
+
+### Decision 24 — Secrets are generated per run, never stored
+
+CI runs `gen_keys.py`, creates a Kubernetes Secret from the output, and deletes
+the local copy. Keys live only for the job. Registry auth uses the automatic
+`GITHUB_TOKEN`. The workflow defaults to `contents: read`; only the build job
+gets `packages: write`.
+
+**Stated limitation:** a production pipeline would not generate its own keys. It
+would fetch them from a KMS/HSM via an OIDC-federated identity, with no static
+credential in CI. This is a test-environment shortcut and is recorded as such.
+
+### Decision 25 — The smoke test asserts PQC, not just liveness
+
+A 200 from `/health` proves the process started. It does not prove the keys were
+mounted, the gateway can reach the cloud, or that hop 2 negotiated hybrid PQC
+rather than silently falling back to classical.
+
+`scripts/smoke_test.py` runs 10 checks across liveness, data flow, post-quantum
+negotiation and the read API. **Both failure modes were verified, not assumed:**
+
+- nothing deployed → exits 1 at the health check;
+- **stack fully up but classical-only → exits 1**, despite 288 readings stored,
+  zero rejections and a healthy `/health`. A conventional health check passes
+  that; this one fails it. That is the check worth having.
+
+### Bug found: 12 CVEs in a transitive dependency
+
+`pip-audit` on its first run found **12 known vulnerabilities in starlette
+0.48.0** (PYSEC-2026-161, -248, -249, -1942, -2280, -2281), pulled in
+transitively by a stale `fastapi>=0.110,<0.120` pin. Nothing in our code was
+wrong; the pin was simply old.
+
+Fixed by moving to `fastapi>=0.141,<0.142` and pinning `starlette>=1.3.1`
+directly so a transitive downgrade is caught too. **All 264 tests passed
+unchanged** across that 22-minor-version jump, and the 11 Docker tests still
+pass.
+
+This is the clearest justification for the weekly cron: a CVE can be published
+against code nobody has touched, so a green build last week is not evidence of a
+safe build today.
+
+### Known weaknesses of this pipeline
+
+Full list in `docs/CICD.md` §7. The ones that matter:
+
+- **The workflow has never run on GitHub.** Every stage was reproduced locally,
+  but runner-specific behaviour (kind startup, GHCR auth, the trivy action,
+  SARIF upload) is **unverified**. Expect to iterate on the first real run.
+- **No persistent environment**, no rollback procedure, no release versioning
+  beyond image tags.
+- **No SBOM and no image signing** (cosign/sigstore) — natural next steps for a
+  project adjacent to supply-chain security.
+- **`ruff format` is not enforced**; it would reformat 18 hand-aligned files and
+  bury real review in noise. Deferred to its own deliberate commit.
+- **Trivy runs with `ignore-unfixed`**, so an unfixable HIGH does not block. It
+  appears in the SARIF report, but nothing forces anyone to read it.
+- **Coverage is an absolute gate, not a trend** — slow erosion from 91% to 85%
+  would pass unnoticed.
+- `sed` substitution of the image tag is the crudest possible templating.
+
+### What a human must verify
+
+1. **Run the workflow.** It is unverified on real runners; that is the single
+   biggest caveat.
+2. That the per-file ruff ignores and every `# nosec` in `pyproject.toml` and the
+   source are agreed to be correct assessments, not conveniences. Each names a
+   specific check and gives a reason; they should be read rather than trusted.
+3. That 85% is the threshold the group wants.
+4. That the `fastapi` 0.119 → 0.141 jump is acceptable. The suite passes, but
+   the group should know a major dependency moved a long way in one step.
+5. Set up branch protection on `main` requiring the `ci-passed` check.
+
+
+---
+
+## 2026-09-21 — Backend visualisation script
+
+### What was done
+
+`scripts/visualize.py`: runs the real device, gateway and cloud apps in-process
+and prints a step-by-step trace of the data path — the two handshakes, the key
+schedule, one reading travelling end to end, the rejection behaviour, and the
+resulting cloud state.
+
+No service code was changed. This is a reading aid for the report and for
+reviewers who want to see the system work without standing up Docker.
+
+### Decision 26 — Measure, do not narrate
+
+Every number printed is taken from a live run through an httpx event-hook tap on
+both TestClients, not hard-coded from the docs. A visualisation that restates
+`ARCHITECTURE.md` can drift away from the code silently; one that reads the wire
+cannot. The ML-KEM sizes (ek 1184 B, ct 1088 B) and the per-message byte counts
+shown are therefore evidence, not claims.
+
+*Alternative considered:* a static Mermaid diagram. Rejected — `ARCHITECTURE.md`
+already has one, and a diagram cannot show that `pqc_fraction` is actually 1.0.
+
+### Decision 27 — Keys are shown only as one-way fingerprints
+
+CLAUDE.md forbids logging keys, shared secrets and plaintext payloads. Step 4
+needs to demonstrate that `key_c2s != key_s2c`, which requires *comparing* two
+keys without revealing either, so it prints truncated SHA-256 fingerprints.
+Shared secrets are reported by length only. Step 1 prints the weather reading
+from the CSV the script itself parsed — source data, never a decrypted payload.
+
+### Bug found in my own probe: wrong defence demonstrated
+
+The first version of the tampered-ciphertext probe incremented `seq` but reused
+the original nonce. `AeadReceiver.decrypt` derives the expected nonce from
+`prefix ‖ counter` and checks it *before* opening the AEAD, so the probe was
+rejected as `replay` — the label said "bit flipped" while the backend was
+actually catching a counter mismatch. Fixed by recomputing the nonce for the new
+`seq`, which now produces the intended `bad_tag`. Both cases are shown side by
+side, since the difference between them is the point.
+
+Same lesson as the Assumption 7 correction earlier in this log: **a negative test
+that passes for the wrong reason proves nothing.** A probe has to be checked
+against *which* defence fired, not merely that something was refused.
+
+### Decision 28 — A local web page over the terminal dump
+
+`scripts/visualize_web.py` renders the same run as a page on `127.0.0.1:8080`,
+with the byte-size bars, flow and metric tiles the terminal cannot show. It also
+exposes `/api/trace` for the raw measurements.
+
+Both front-ends read one shared `collect_trace()`, and the CLI's step 4 and step 6
+were refactored onto the shared `sample_key_schedule()` and
+`run_rejection_probes()` helpers. Two front-ends measuring independently would
+eventually disagree, and the one that disagreed would still look authoritative.
+
+*Alternative considered:* emit a static HTML file. Rejected — a file gets stale
+and then gets quoted. The page re-runs the stack, so it is always current or it
+is not there at all.
+
+**Bound to 127.0.0.1, never 0.0.0.0.** It performs handshakes with development
+keys and reports internal byte counts; it is a local diagnostic.
+
+### Known weaknesses
+
+- **No tests.** Both are diagnostic scripts, consistent with `demo_phases.py` and
+  `benchmark.py`; it exercises the services but asserts nothing, so it will not
+  catch a regression. The suite in `tests/` is what does that.
+- Runs in-process, so it shows protocol behaviour, not container, network or
+  concurrency behaviour. The Docker suite and `smoke_test.py` cover those.
+- The hop 2 handshake-byte figure quoted in step 5 is from the benchmark
+  baseline, not measured in that run; the ClientHello/ServerHello sizes printed
+  in step 3 *are* measured.
+- ANSI colour is unconditional — no `--no-color` and no TTY detection.
+- The web page holds one cached trace in module state with a lock around the
+  run. It is single-user by construction; concurrent "Run again" clicks
+  serialise rather than queue sensibly.
+- The page is served from a Python string. Fine at this size, but it is not a
+  template system and will not stay pleasant if it grows.
+
+### What a human must verify
+
+1. That the narration in each step matches what the code actually does. The
+   numbers are measured; the *explanations* around them are mine and are exactly
+   the kind of plausible-sounding prose this project treats as untrusted.
+2. That printing truncated key fingerprints is agreed to be acceptable under the
+   "never log keys" rule. It is one-way and the argument is given above, but it
+   is a judgement call the group should confirm rather than inherit.
