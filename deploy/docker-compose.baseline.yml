@@ -1,102 +1,160 @@
 # v0 baseline: every link uses the legacy RSA suite.
 #
 # This is the system before modernization. Both hops are quantum-vulnerable,
-# which is what makes the harvest-now-decrypt-later demonstration work and
-# what the migration is measured against.
+# which is what makes the harvest-now-decrypt-later demonstration work and what
+# the migration is measured against.
+#
+#   legacy-device --> tap-edge --> gateway --> tap-backbone --> cloud
+#
+# Run the attack afterwards with:
+#   docker compose -f deploy/docker-compose.baseline.yml --profile attack \
+#       run --rm harvester
 
 name: mlkem-baseline
 
+x-node: &node
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.service
+  environment: &node-env
+    LOG_LEVEL: INFO
+
+x-healthcheck-python: &healthcheck-python
+  interval: 3s
+  timeout: 3s
+  retries: 10
+  start_period: 3s
+
 services:
   cloud:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.service
+    <<: *node
     command: ["python", "-m", "services.cloud"]
     environment:
+      <<: *node-env
       PORT: "8000"
       CLOUD_DB_PATH: /var/lib/node/readings.db
       CLOUD_KEY_PATH: /var/lib/node/cloud_rsa.pem
-      LOG_LEVEL: INFO
     volumes:
       - cloud-state:/var/lib/node
-    networks:
-      - backbone
-    ports:
-      - "8000:8000"
+    networks: [backbone]
+    ports: ["8000:8000"]
     healthcheck:
+      <<: *healthcheck-python
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
-      start_period: 3s
+
+  tap-backbone:
+    <<: *node
+    command: ["python", "-m", "services.tap"]
+    environment:
+      <<: *node-env
+      PORT: "9000"
+      LINK_LABEL: backbone
+      TAP_UPSTREAM_URL: http://cloud:8000
+      CAPTURE_PATH: /var/lib/capture/backbone.jsonl
+    volumes:
+      - capture:/var/lib/capture
+    networks: [backbone]
+    depends_on:
+      cloud: {condition: service_healthy}
+    healthcheck:
+      <<: *healthcheck-python
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9000/tap/healthz')"]
 
   gateway:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.service
+    <<: *node
     command: ["python", "-m", "services.gateway"]
     environment:
+      <<: *node-env
       PORT: "8080"
-      CLOUD_URL: http://cloud:8000
+      # Upstream traffic is routed through the tap, so the gateway-to-cloud
+      # link is observed exactly as the device-to-gateway link is.
+      CLOUD_URL: http://tap-backbone:9000
       GATEWAY_KEY_PATH: /var/lib/node/gateway_rsa.pem
-      LOG_LEVEL: INFO
     volumes:
       - gateway-state:/var/lib/node
-    networks:
-      # The gateway straddles both segments. That position is exactly what lets
-      # it terminate the device's legacy session and open a separate,
-      # modernized session to the cloud.
-      - edge
-      - backbone
-    ports:
-      - "8080:8080"
+    # The gateway straddles both segments. That position is what lets it
+    # terminate the device's legacy session and open a separate session onward.
+    networks: [edge, backbone]
+    ports: ["8080:8080"]
     depends_on:
-      cloud:
-        condition: service_healthy
+      tap-backbone: {condition: service_healthy}
     healthcheck:
+      <<: *healthcheck-python
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
-      start_period: 3s
+
+  tap-edge:
+    <<: *node
+    command: ["python", "-m", "services.tap"]
+    environment:
+      <<: *node-env
+      PORT: "9000"
+      LINK_LABEL: edge
+      TAP_UPSTREAM_URL: http://gateway:8080
+      CAPTURE_PATH: /var/lib/capture/edge.jsonl
+    volumes:
+      - capture:/var/lib/capture
+    networks: [edge]
+    depends_on:
+      gateway: {condition: service_healthy}
+    healthcheck:
+      <<: *healthcheck-python
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9000/tap/healthz')"]
 
   legacy-device:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.device
     environment:
-      GATEWAY_URL: http://gateway:8080
+      LOG_LEVEL: INFO
+      GATEWAY_URL: http://tap-edge:9000
       DEVICE_ID: weather-station-01
       DATASET_PATH: /data/weather_data.csv
-      SEND_INTERVAL_SECONDS: "1.0"
+      SEND_INTERVAL_SECONDS: "0.2"
       MAX_READINGS: "0"
-      LOG_LEVEL: INFO
     volumes:
       - ../data:/data:ro
-    networks:
-      - edge
+    networks: [edge]
     depends_on:
-      gateway:
-        condition: service_healthy
+      tap-edge: {condition: service_healthy}
 
-    # Hardware limits. These are what make "the device cannot do ML-KEM" a
-    # property of the deployment rather than a claim in a comment.
+    # Hardware limits. These make the device's constraints a property of the
+    # deployment rather than a claim in a comment. Note that neither the memory
+    # nor the CPU cap is what prevents ML-KEM -- see Dockerfile.device.
     mem_limit: 48m
     memswap_limit: 48m
     cpus: 0.1
     pids_limit: 32
     read_only: true
-    tmpfs:
-      - /tmp:size=4m
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+    tmpfs: ["/tmp:size=4m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # Offline attacker. Not started with the stack; run it on demand once enough
+  # traffic has been captured.
+  harvester:
+    <<: *node
+    profiles: ["attack"]
+    entrypoint:
+      - python
+      - -m
+      - services.harvester
+      - --capture=/var/lib/capture/edge.jsonl
+      - --capture=/var/lib/capture/backbone.jsonl
+      - --rsa-key=/keys/gateway/gateway_rsa.pem
+      - --rsa-key=/keys/cloud/cloud_rsa.pem
+    command: []
+    volumes:
+      - capture:/var/lib/capture:ro
+      # The attacker is handed both long-term private keys, modelling the end
+      # state of a successful Shor's-algorithm recovery.
+      - gateway-state:/keys/gateway:ro
+      - cloud-state:/keys/cloud:ro
+    networks: [backbone]
 
 networks:
-  # internal: true removes the default gateway, so the device can reach the
-  # edge gateway and nothing else. No package index, no upgrade path -- the
-  # constraint that actually keeps fielded firmware on obsolete cryptography.
+  # internal: true removes the default route, so the device can reach the edge
+  # tap and nothing else. No package index, no upgrade path -- the constraint
+  # that actually keeps fielded firmware on obsolete cryptography.
   edge:
     internal: true
   backbone:
@@ -104,3 +162,4 @@ networks:
 volumes:
   cloud-state:
   gateway-state:
+  capture:

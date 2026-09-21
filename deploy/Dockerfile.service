@@ -32,8 +32,8 @@ COPY services /app/services
 # image's ownership, and a root-owned mount point leaves the service unable
 # to open its own database.
 RUN useradd --create-home --uid 10002 node \
- && mkdir -p /var/lib/node \
- && chown node:node /var/lib/node
+ && mkdir -p /var/lib/node /var/lib/capture \
+ && chown node:node /var/lib/node /var/lib/capture
 USER node
 
 CMD ["python", "-m", "services.cloud"]
