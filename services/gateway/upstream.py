@@ -12,9 +12,9 @@ from typing import Any, Protocol
 
 import httpx
 
-import cryptosuite as cs
-from wire.frames import DataFrame, b64d
-from wire.protocol import HYBRID_PQC, LEGACY_RSA
+import pqcsuite as cs
+from pqcwire.frames import DataFrame, b64d
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
 
 
 class UpstreamError(RuntimeError):

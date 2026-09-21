@@ -15,12 +15,12 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from cryptosuite.hybrid import (
+from pqcsuite.hybrid import (
     generate_identity_key,
     load_identity_private,
     serialize_identity_private,
 )
-from cryptosuite.legacy import (
+from pqcsuite.legacy import (
     generate_private_key,
     load_private_key,
     serialize_private_key,

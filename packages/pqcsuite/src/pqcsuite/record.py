@@ -13,8 +13,8 @@ import threading
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from wire.frames import DataFrame, FrameError, nonce_for_seq
-from wire.sequence import SequenceCounter, SequenceGuard
+from pqcwire.frames import DataFrame, FrameError, nonce_for_seq
+from pqcwire.sequence import SequenceCounter, SequenceGuard
 
 KEY_LENGTH = 32
 

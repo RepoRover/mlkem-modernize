@@ -6,7 +6,7 @@ pre-quantum crypto backend can still import the code, report its capabilities,
 and speak the legacy suite.
 """
 
-from cryptosuite.capabilities import (
+from pqcsuite.capabilities import (
     MLKEM_AVAILABLE,
     CapabilityError,
     CapabilityReport,
@@ -14,7 +14,7 @@ from cryptosuite.capabilities import (
     probe,
     supported_suites,
 )
-from cryptosuite.hybrid import (
+from pqcsuite.hybrid import (
     HybridClient,
     HybridServer,
     Offer,
@@ -24,8 +24,8 @@ from cryptosuite.hybrid import (
     serialize_identity_private,
     serialize_identity_public,
 )
-from cryptosuite.keystore import load_or_create_identity, load_or_create_rsa
-from cryptosuite.legacy import (
+from pqcsuite.keystore import load_or_create_identity, load_or_create_rsa
+from pqcsuite.legacy import (
     LegacyClient,
     LegacyServer,
     generate_private_key,
@@ -36,7 +36,7 @@ from cryptosuite.legacy import (
     serialize_private_key,
     serialize_public_key,
 )
-from cryptosuite.record import KEY_LENGTH, AuthenticationError, RecordSession
+from pqcsuite.record import KEY_LENGTH, AuthenticationError, RecordSession
 
 __all__ = [
     "KEY_LENGTH",

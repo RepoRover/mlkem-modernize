@@ -5,8 +5,8 @@ of the weaknesses the project sets out to fix. Negative-path, known-answer,
 and cross-implementation tests arrive with the validation milestone.
 """
 
-import cryptosuite as cs
-from wire.telemetry import WeatherReading
+import pqcsuite as cs
+from pqcwire.telemetry import WeatherReading
 
 
 def _pair():

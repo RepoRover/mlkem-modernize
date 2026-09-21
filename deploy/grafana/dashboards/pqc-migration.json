@@ -1,0 +1,85 @@
+{
+  "title": "Post-Quantum Migration",
+  "uid": "pqc-migration",
+  "tags": ["pqc", "migration"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Quantum-vulnerable frames accepted",
+      "description": "The migration's primary indicator. Traffic accepted under a suite a quantum adversary is expected to break. Should reach zero and stay there.",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "sum(pqc_quantum_vulnerable_frames_total)", "legendFormat": "vulnerable", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 1}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "piechart",
+      "title": "Accepted frames by suite",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
+      "targets": [
+        {"expr": "sum by (suite) (pqc_frames_total{result=\"accepted\"})", "legendFormat": "{{suite}}", "refId": "A"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Suite in use per link",
+      "description": "Which cipher suite each node is configured to use, and whether it is quantum-resistant.",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
+      "targets": [
+        {"expr": "pqc_suite_in_use", "format": "table", "instant": true, "refId": "A"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Handshake duration p95 by suite",
+      "description": "ML-KEM decapsulation is cheaper than RSA decryption, but the hybrid handshake does more work overall on the initiator.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, suite) (rate(pqc_handshake_duration_seconds_bucket[1m])))",
+          "legendFormat": "{{suite}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Frame outcomes",
+      "description": "A rise in rejected frames during a migration usually means a suite mismatch rather than an attack.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {"expr": "sum by (result) (rate(pqc_frames_total[1m]))", "legendFormat": "{{result}}", "refId": "A"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Active sessions",
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 14},
+      "targets": [
+        {"expr": "pqc_active_sessions", "legendFormat": "{{service}}", "refId": "A"}
+      ]
+    }
+  ]
+}

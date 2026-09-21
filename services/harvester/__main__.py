@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from cryptosuite.legacy import load_private_key
+from pqcsuite.legacy import load_private_key
 from services.harvester.attack import LinkReport, harvest, load_capture
 
 BANNER = """
@@ -44,6 +44,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="recovered RSA private key in PEM form (repeatable)",
     )
     parser.add_argument("--json", type=Path, help="also write the report as JSON")
+    parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="stdout format; json is intended for automated checks",
+    )
     return parser.parse_args(argv)
 
 
@@ -107,7 +113,11 @@ def main(argv: list[str]) -> int:
 
     keys = [load_private_key(path.read_bytes()) for path in args.rsa_key]
     reports = harvest(entries, keys)
-    print(render(reports, args.rsa_key))
+
+    if args.format == "json":
+        print(json.dumps([report.to_dict() for report in reports], indent=2))
+    else:
+        print(render(reports, args.rsa_key))
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-21T04:09:41+0300",
+  "captured_at": "2026-09-21T11:10:30+0300",
   "environment": {
     "cryptography_version": "50.0.1",
     "machine": "arm64",
@@ -25,49 +25,49 @@
       "suite": "LEGACY-RSA2048-OAEP-AESGCM",
       "timings": [
         {
-          "max_ms": 118.8256,
-          "mean_ms": 69.2627,
-          "median_ms": 65.9999,
-          "min_ms": 21.0668,
+          "max_ms": 100.1899,
+          "mean_ms": 46.8659,
+          "median_ms": 37.4599,
+          "min_ms": 18.0671,
           "operation": "keygen (RSA-2048)",
-          "p95_ms": 118.8256,
-          "samples": 10
+          "p95_ms": 100.1899,
+          "samples": 5
         },
         {
-          "max_ms": 0.0375,
-          "mean_ms": 0.0252,
-          "median_ms": 0.0247,
-          "min_ms": 0.0237,
+          "max_ms": 0.0305,
+          "mean_ms": 0.0251,
+          "median_ms": 0.0249,
+          "min_ms": 0.0242,
           "operation": "handshake: client",
-          "p95_ms": 0.0277,
-          "samples": 200
+          "p95_ms": 0.0259,
+          "samples": 50
         },
         {
-          "max_ms": 1.98,
-          "mean_ms": 0.9304,
-          "median_ms": 0.897,
-          "min_ms": 0.8473,
+          "max_ms": 1.9461,
+          "mean_ms": 0.92,
+          "median_ms": 0.8989,
+          "min_ms": 0.8699,
           "operation": "handshake: server",
-          "p95_ms": 0.9925,
-          "samples": 200
+          "p95_ms": 0.9297,
+          "samples": 50
         },
         {
-          "max_ms": 0.0041,
-          "mean_ms": 0.0018,
-          "median_ms": 0.0018,
+          "max_ms": 0.0045,
+          "mean_ms": 0.0019,
+          "median_ms": 0.0017,
           "min_ms": 0.0016,
           "operation": "seal one reading",
-          "p95_ms": 0.002,
-          "samples": 200
+          "p95_ms": 0.0024,
+          "samples": 50
         },
         {
-          "max_ms": 1.9519,
-          "mean_ms": 0.9618,
-          "median_ms": 0.9381,
-          "min_ms": 0.8904,
+          "max_ms": 1.9475,
+          "mean_ms": 1.0192,
+          "median_ms": 0.9304,
+          "min_ms": 0.9256,
           "operation": "handshake + seal + open",
-          "p95_ms": 1.0354,
-          "samples": 50
+          "p95_ms": 1.9475,
+          "samples": 12
         }
       ]
     },
@@ -91,49 +91,49 @@
       "suite": "MLKEM768-X25519-HKDF-AESGCM",
       "timings": [
         {
-          "max_ms": 0.2837,
-          "mean_ms": 0.2612,
-          "median_ms": 0.2569,
-          "min_ms": 0.255,
+          "max_ms": 0.2584,
+          "mean_ms": 0.2565,
+          "median_ms": 0.2563,
+          "min_ms": 0.2556,
           "operation": "keygen (ML-KEM-768)",
-          "p95_ms": 0.2837,
-          "samples": 10
+          "p95_ms": 0.2584,
+          "samples": 5
         },
         {
-          "max_ms": 12.3622,
-          "mean_ms": 3.3892,
-          "median_ms": 2.4468,
-          "min_ms": 1.327,
+          "max_ms": 11.302,
+          "mean_ms": 4.2872,
+          "median_ms": 3.8113,
+          "min_ms": 1.325,
           "operation": "offer: keygen + ML-DSA sign",
-          "p95_ms": 8.4624,
-          "samples": 200
-        },
-        {
-          "max_ms": 0.9249,
-          "mean_ms": 0.779,
-          "median_ms": 0.7641,
-          "min_ms": 0.7523,
-          "operation": "handshake: client",
-          "p95_ms": 0.8744,
-          "samples": 200
-        },
-        {
-          "max_ms": 0.3605,
-          "mean_ms": 0.284,
-          "median_ms": 0.2791,
-          "min_ms": 0.2754,
-          "operation": "handshake: server",
-          "p95_ms": 0.3229,
+          "p95_ms": 9.8186,
           "samples": 50
         },
         {
-          "max_ms": 0.0033,
-          "mean_ms": 0.0017,
+          "max_ms": 0.8062,
+          "mean_ms": 0.7688,
+          "median_ms": 0.7668,
+          "min_ms": 0.7527,
+          "operation": "handshake: client",
+          "p95_ms": 0.7964,
+          "samples": 50
+        },
+        {
+          "max_ms": 0.2939,
+          "mean_ms": 0.2768,
+          "median_ms": 0.2742,
+          "min_ms": 0.2723,
+          "operation": "handshake: server",
+          "p95_ms": 0.2939,
+          "samples": 12
+        },
+        {
+          "max_ms": 0.0029,
+          "mean_ms": 0.0018,
           "median_ms": 0.0017,
-          "min_ms": 0.0016,
+          "min_ms": 0.0017,
           "operation": "seal one reading",
-          "p95_ms": 0.0018,
-          "samples": 200
+          "p95_ms": 0.0019,
+          "samples": 50
         }
       ]
     }

@@ -19,11 +19,11 @@ RUN pip install --no-cache-dir \
         "httpx>=0.28" \
         "prometheus-client>=0.21"
 
-COPY packages/wire /app/packages/wire
-COPY packages/nodekit /app/packages/nodekit
-COPY packages/cryptosuite /app/packages/cryptosuite
+COPY packages/pqcwire /app/packages/pqcwire
+COPY packages/pqcnode /app/packages/pqcnode
+COPY packages/pqcsuite /app/packages/pqcsuite
 RUN pip install --no-cache-dir --no-deps \
-        ./packages/wire ./packages/nodekit ./packages/cryptosuite
+        ./packages/pqcwire ./packages/pqcnode ./packages/pqcsuite
 
 COPY services /app/services
 

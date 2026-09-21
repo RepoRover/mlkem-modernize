@@ -20,12 +20,12 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Request, Response
 
-import nodekit
-from nodekit.config import env_float, env_path, env_str
+import pqcnode
+from pqcnode.config import env_float, env_path, env_str
 
 SERVICE = "tap"
 
-log = nodekit.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
+log = pqcnode.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
 
 app = FastAPI(title="Passive Network Tap", version="0.1.0")
 

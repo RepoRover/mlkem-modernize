@@ -1,6 +1,6 @@
 import uvicorn
 
-from nodekit.config import env_int, env_str
+from pqcnode.config import env_int, env_str
 
 if __name__ == "__main__":
     uvicorn.run(

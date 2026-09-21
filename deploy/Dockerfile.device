@@ -27,11 +27,11 @@ WORKDIR /app
 # packages can never silently pull a newer, PQC-capable build.
 RUN pip install --no-cache-dir "cryptography==3.4.8"
 
-COPY packages/wire /app/packages/wire
-COPY packages/nodekit /app/packages/nodekit
-COPY packages/cryptosuite /app/packages/cryptosuite
+COPY packages/pqcwire /app/packages/pqcwire
+COPY packages/pqcnode /app/packages/pqcnode
+COPY packages/pqcsuite /app/packages/pqcsuite
 RUN pip install --no-cache-dir --no-deps \
-        ./packages/wire ./packages/nodekit ./packages/cryptosuite
+        ./packages/pqcwire ./packages/pqcnode ./packages/pqcsuite
 
 COPY services/__init__.py /app/services/__init__.py
 COPY services/legacy_device /app/services/legacy_device

@@ -1,6 +1,6 @@
 """The modernized post-quantum key-establishment mechanism.
 
-Every weakness catalogued in :mod:`cryptosuite.legacy` is addressed here:
+Every weakness catalogued in :mod:`pqcsuite.legacy` is addressed here:
 
 * **Post-quantum confidentiality.** ML-KEM-768 replaces RSA transport, so a
   quantum adversary gains nothing from archived traffic.
@@ -32,10 +32,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from cryptosuite.capabilities import CapabilityError, mlkem_module
-from cryptosuite.record import KEY_LENGTH, RecordSession
-from wire.frames import FrameError, HandshakeRequest, b64d, b64e, canonical
-from wire.protocol import HYBRID_PQC, PROTOCOL_VERSION
+from pqcsuite.capabilities import CapabilityError, mlkem_module
+from pqcsuite.record import KEY_LENGTH, RecordSession
+from pqcwire.frames import FrameError, HandshakeRequest, b64d, b64e, canonical
+from pqcwire.protocol import HYBRID_PQC, PROTOCOL_VERSION
 
 _OFFER_CONTEXT = b"mlkem-modernize/offer/v1"
 _TRANSCRIPT_CONTEXT = b"mlkem-modernize/transcript/v1"
@@ -65,7 +65,9 @@ def generate_identity_key() -> Any:
 
 
 def serialize_identity_private(key: Any) -> bytes:
-    return key.private_bytes_raw()
+    # The ML-DSA classes are reached through a guarded import and are therefore
+    # untyped here; narrow the value rather than leaking Any to callers.
+    return bytes(key.private_bytes_raw())
 
 
 def load_identity_private(seed: bytes) -> Any:
@@ -73,7 +75,7 @@ def load_identity_private(seed: bytes) -> Any:
 
 
 def serialize_identity_public(key: Any) -> bytes:
-    return key.public_bytes_raw()
+    return bytes(key.public_bytes_raw())
 
 
 def load_identity_public(raw: bytes) -> Any:

@@ -61,7 +61,7 @@ def test_device_image_has_no_mlkem_primitive(device_image):
             device_image,
             "python",
             "-c",
-            "import cryptosuite, json; print(json.dumps(cryptosuite.probe().to_dict()))",
+            "import pqcsuite, json; print(json.dumps(pqcsuite.probe().to_dict()))",
         ]
     )
     assert result.returncode == 0, result.stderr

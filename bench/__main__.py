@@ -8,8 +8,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pqcsuite as cs
 from bench.harness import DEFAULT_ITERATIONS, render_table, write_report
-from bench.suites import benchmark_legacy
+from bench.suites import benchmark_hybrid, benchmark_legacy
+from pqcwire.protocol import HYBRID_PQC
 
 REPORT_DIR = Path(__file__).resolve().parent / "results"
 
@@ -19,11 +21,7 @@ def main(argv: list[str]) -> int:
     iterations = int(argv[2]) if len(argv) > 2 else DEFAULT_ITERATIONS
 
     benchmarks = [benchmark_legacy(iterations)]
-    try:
-        from bench.suites import benchmark_hybrid  # type: ignore[attr-defined]
-    except ImportError:
-        pass
-    else:
+    if HYBRID_PQC in cs.supported_suites():
         benchmarks.append(benchmark_hybrid(iterations))
 
     print(render_table(benchmarks))

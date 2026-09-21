@@ -1,9 +1,9 @@
 import cryptography
 import pytest
 
-import cryptosuite as cs
-from cryptosuite import capabilities
-from wire.protocol import HYBRID_PQC, LEGACY_RSA
+import pqcsuite as cs
+from pqcsuite import capabilities
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
 
 
 def test_probe_describes_the_installed_backend():

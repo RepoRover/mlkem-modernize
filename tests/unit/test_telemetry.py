@@ -1,6 +1,6 @@
 import pytest
 
-from wire.telemetry import DatasetError, WeatherReading, load_dataset
+from pqcwire.telemetry import DatasetError, WeatherReading, load_dataset
 
 
 def test_dataset_loads_with_station_metadata(dataset_path):

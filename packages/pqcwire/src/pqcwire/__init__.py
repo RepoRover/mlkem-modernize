@@ -1,6 +1,6 @@
 """Stdlib-only protocol layer shared by the legacy device, gateway, and cloud."""
 
-from wire.frames import (
+from pqcwire.frames import (
     MAX_SEQ,
     NONCE_LENGTH,
     DataFrame,
@@ -15,7 +15,7 @@ from wire.frames import (
     lp,
     nonce_for_seq,
 )
-from wire.protocol import (
+from pqcwire.protocol import (
     HYBRID_PQC,
     LEGACY_RSA,
     PROTOCOL_VERSION,
@@ -24,8 +24,8 @@ from wire.protocol import (
     UnknownSuiteError,
     suite_spec,
 )
-from wire.sequence import ReplayError, SequenceCounter, SequenceGuard
-from wire.telemetry import (
+from pqcwire.sequence import ReplayError, SequenceCounter, SequenceGuard
+from pqcwire.telemetry import (
     DatasetError,
     StationMetadata,
     WeatherDataset,

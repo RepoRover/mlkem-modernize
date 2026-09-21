@@ -10,22 +10,24 @@ going unnoticed.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
 
-import cryptosuite as cs
-import nodekit
-from nodekit.config import env_bool, env_int, env_path, env_str
+import pqcnode
+import pqcsuite as cs
+from pqcnode.config import env_bool, env_int, env_path, env_str
+from pqcwire.frames import DataFrame, FrameError, HandshakeRequest
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA, suite_spec
+from pqcwire.telemetry import DatasetError, WeatherReading
+from services import metrics
 from services.cloud.store import ReadingStore
-from wire.frames import DataFrame, FrameError, HandshakeRequest
-from wire.protocol import HYBRID_PQC, LEGACY_RSA, suite_spec
-from wire.telemetry import DatasetError, WeatherReading
 
 SERVICE = "cloud"
 
-log = nodekit.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
+log = pqcnode.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
 
 app = FastAPI(title="PQC Telemetry Cloud", version="0.2.0")
 
@@ -40,10 +42,13 @@ _identity_key = cs.load_or_create_identity(
 )
 _hybrid_server = cs.HybridServer(_identity_key, ttl_seconds=env_int("OFFER_TTL_SECONDS", 60))
 
-_sessions: nodekit.SessionStore = nodekit.SessionStore(
+_sessions: pqcnode.SessionStore[cs.RecordSession] = pqcnode.SessionStore(
     ttl_seconds=env_int("SESSION_TTL_SECONDS", 900),
     max_entries=env_int("SESSION_MAX_ENTRIES", 512),
 )
+
+for _suite in cs.supported_suites() if _allow_legacy else [HYBRID_PQC]:
+    metrics.record_suite(SERVICE, "inbound", _suite)
 
 log.info(
     "cloud started",
@@ -64,6 +69,13 @@ def readyz() -> JSONResponse:
         log.error("readiness probe failed", extra={"error": str(exc)})
         return JSONResponse({"status": "unready"}, status_code=503)
     return JSONResponse({"status": "ready", "sessions": len(_sessions)})
+
+
+@app.get("/metrics")
+def prometheus_metrics() -> Response:
+    metrics.ACTIVE_SESSIONS.labels(service=SERVICE).set(len(_sessions))
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
 
 
 @app.get("/capabilities")
@@ -106,7 +118,7 @@ def legacy_frame(body: dict[str, Any]) -> dict[str, Any]:
 @app.get("/pqc/identity")
 def pqc_identity() -> dict[str, str]:
     """The long-term ML-DSA public key used to sign ephemeral offers."""
-    from wire.frames import b64e
+    from pqcwire.frames import b64e
 
     return {
         "algorithm": "ML-DSA-65",
@@ -173,15 +185,23 @@ def _require_legacy_allowed() -> None:
         )
 
 
-def _establish(body: dict[str, Any], accept) -> dict[str, str]:
+def _establish(
+    body: dict[str, Any], accept: Callable[[HandshakeRequest], cs.RecordSession]
+) -> dict[str, str]:
+    declared = str(body.get("suite", "unknown"))
     try:
-        request = HandshakeRequest.from_dict(body)
-        session = accept(request)
+        with metrics.timed(metrics.HANDSHAKE_DURATION, service=SERVICE, suite=declared):
+            request = HandshakeRequest.from_dict(body)
+            session = accept(request)
     except FrameError as exc:
+        metrics.record_handshake(SERVICE, declared, "rejected")
         log.warning("rejected handshake", extra={"error": str(exc)})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except cs.CapabilityError as exc:
+        metrics.record_handshake(SERVICE, declared, "unsupported")
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+    metrics.record_handshake(SERVICE, request.suite, "established")
 
     _sessions.put(request.session_id, session)
     spec = suite_spec(request.suite)
@@ -204,12 +224,14 @@ def _accept_frame(body: dict[str, Any]) -> dict[str, Any]:
 
     try:
         session = _sessions.get(frame.session_id)
-    except nodekit.SessionNotFound:
+    except pqcnode.SessionNotFound:
+        metrics.record_frame(SERVICE, frame.suite, "unknown_session")
         raise HTTPException(status_code=409, detail="unknown or expired session") from None
 
     try:
         plaintext = session.open(frame)
     except FrameError as exc:
+        metrics.record_frame(SERVICE, frame.suite, "rejected")
         log.warning(
             "frame rejected",
             extra={"session_id": frame.session_id, "seq": frame.seq, "error": str(exc)},
@@ -222,6 +244,7 @@ def _accept_frame(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="payload is not a weather reading") from exc
 
     _store.insert(frame.session_id, frame.seq, frame.suite, reading)
+    metrics.record_frame(SERVICE, frame.suite, "accepted")
     log.info(
         "reading stored",
         extra={

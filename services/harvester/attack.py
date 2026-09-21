@@ -22,9 +22,9 @@ from typing import Any
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from cryptosuite.legacy import recover_session_key
-from wire.frames import DataFrame, FrameError, HandshakeRequest
-from wire.protocol import HYBRID_PQC, LEGACY_RSA
+from pqcsuite.legacy import recover_session_key
+from pqcwire.frames import DataFrame, FrameError, HandshakeRequest
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
 
 HANDSHAKE_PATHS = {"/legacy/session", "/pqc/session"}
 FRAME_PATHS = {"/legacy/frames", "/pqc/frames"}

@@ -26,9 +26,9 @@ import secrets
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from cryptosuite.record import KEY_LENGTH, RecordSession
-from wire.frames import FrameError, HandshakeRequest, b64d, b64e
-from wire.protocol import LEGACY_RSA
+from pqcsuite.record import KEY_LENGTH, RecordSession
+from pqcwire.frames import FrameError, HandshakeRequest, b64d, b64e
+from pqcwire.protocol import LEGACY_RSA
 
 RSA_KEY_BITS = 2048
 PUBLIC_EXPONENT = 65537

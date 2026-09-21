@@ -55,7 +55,7 @@ will check.
 ## 3. Cryptographic weaknesses
 
 Three defects are deliberate, and are marked as such in
-[`cryptosuite/legacy.py`](../packages/cryptosuite/src/cryptosuite/legacy.py).
+[`cryptosuite/legacy.py`](../packages/pqcsuite/src/pqcsuite/legacy.py).
 
 | # | Defect | Consequence |
 |---|---|---|

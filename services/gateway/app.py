@@ -13,15 +13,16 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
 
-import cryptosuite as cs
-import nodekit
-from nodekit.config import env_float, env_int, env_path, env_str
+import pqcnode
+import pqcsuite as cs
+from pqcnode.config import env_float, env_int, env_path, env_str
+from pqcwire.frames import DataFrame, FrameError, HandshakeRequest
+from services import metrics
 from services.gateway.upstream import UpstreamError, build_upstream
-from wire.frames import DataFrame, FrameError, HandshakeRequest
 
 SERVICE = "gateway"
 
-log = nodekit.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
+log = pqcnode.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
 
 app = FastAPI(title="PQC Edge Gateway", version="0.1.0")
 
@@ -35,6 +36,9 @@ _upstream = build_upstream(
     timeout=env_float("UPSTREAM_TIMEOUT_SECONDS", 5.0),
 )
 
+metrics.record_suite(SERVICE, "downstream", _legacy_server.suite)
+metrics.record_suite(SERVICE, "upstream", _upstream.suite)
+
 log.info(
     "gateway started",
     extra={
@@ -45,7 +49,7 @@ log.info(
 )
 
 # Maps a device session to the independent upstream session that relays it.
-_sessions: nodekit.SessionStore = nodekit.SessionStore(
+_sessions: pqcnode.SessionStore[tuple[cs.RecordSession, cs.RecordSession]] = pqcnode.SessionStore(
     ttl_seconds=env_int("SESSION_TTL_SECONDS", 900),
     max_entries=env_int("SESSION_MAX_ENTRIES", 512),
 )
@@ -59,6 +63,13 @@ def healthz() -> dict[str, str]:
 @app.get("/readyz")
 def readyz() -> JSONResponse:
     return JSONResponse({"status": "ready", "sessions": len(_sessions)})
+
+
+@app.get("/metrics")
+def prometheus_metrics() -> Response:
+    metrics.ACTIVE_SESSIONS.labels(service=SERVICE).set(len(_sessions))
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
 
 
 @app.get("/capabilities")
@@ -82,14 +93,19 @@ def legacy_session(body: dict[str, Any]) -> dict[str, str]:
         request = HandshakeRequest.from_dict(body)
         downstream = _legacy_server.accept(request)
     except FrameError as exc:
+        metrics.record_handshake(SERVICE, str(body.get("suite", "unknown")), "rejected")
         log.warning("rejected device handshake", extra={"error": str(exc)})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         upstream_id, upstream = _upstream.open_session()
     except UpstreamError as exc:
+        metrics.record_handshake(SERVICE, _upstream.suite, "upstream_failed")
         log.error("upstream handshake failed", extra={"error": str(exc)})
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    metrics.record_handshake(SERVICE, request.suite, "established")
+    metrics.record_handshake(SERVICE, _upstream.suite, "established")
 
     _sessions.put(request.session_id, (downstream, upstream))
     log.info(
@@ -113,12 +129,13 @@ def legacy_frame(body: dict[str, Any]) -> dict[str, Any]:
 
     try:
         downstream, upstream = _relay_for(frame.session_id)
-    except nodekit.SessionNotFound:
+    except pqcnode.SessionNotFound:
         raise HTTPException(status_code=409, detail="unknown or expired session") from None
 
     try:
         plaintext = downstream.open(frame)
     except FrameError as exc:
+        metrics.record_frame(SERVICE, frame.suite, "rejected")
         log.warning(
             "device frame rejected",
             extra={"session_id": frame.session_id, "seq": frame.seq, "error": str(exc)},
@@ -128,15 +145,20 @@ def legacy_frame(body: dict[str, Any]) -> dict[str, Any]:
     # Re-encrypt under the upstream session rather than forwarding the original
     # frame: the two links are separate cryptographic contexts, which is what
     # allows them to use different suites.
+    metrics.record_frame(SERVICE, frame.suite, "accepted")
     try:
-        _upstream.send(upstream.seal(plaintext))
+        with metrics.timed(metrics.CRYPTO_OPERATION, service=SERVICE, operation="reseal_upstream"):
+            resealed = upstream.seal(plaintext)
+        _upstream.send(resealed)
     except UpstreamError as exc:
+        metrics.record_frame(SERVICE, _upstream.suite, "upstream_failed")
         log.error(
             "relay to cloud failed",
             extra={"session_id": frame.session_id, "seq": frame.seq, "error": str(exc)},
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    metrics.record_frame(SERVICE, _upstream.suite, "accepted")
     log.info(
         "frame relayed",
         extra={

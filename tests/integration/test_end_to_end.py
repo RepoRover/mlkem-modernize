@@ -12,9 +12,9 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
-import cryptosuite as cs
-from wire.protocol import HYBRID_PQC, LEGACY_RSA
-from wire.telemetry import WeatherReading
+import pqcsuite as cs
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
+from pqcwire.telemetry import WeatherReading
 
 READINGS = [
     WeatherReading("2024-01-01", 7.4, 3.4, 1.8, 19.7),

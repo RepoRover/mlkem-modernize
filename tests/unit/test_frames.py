@@ -2,7 +2,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from wire.frames import (
+from pqcwire.frames import (
     MAX_SEQ,
     DataFrame,
     FrameError,
@@ -14,7 +14,7 @@ from wire.frames import (
     loads,
     nonce_for_seq,
 )
-from wire.protocol import LEGACY_RSA, PROTOCOL_VERSION
+from pqcwire.protocol import LEGACY_RSA, PROTOCOL_VERSION
 
 
 def test_data_frame_round_trips_through_json():

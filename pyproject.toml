@@ -5,9 +5,9 @@ description = "ML-KEM legacy modernization: simulated edge device, PQC broker ga
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "wire",
-    "cryptosuite",
-    "nodekit",
+    "pqcwire",
+    "pqcsuite",
+    "pqcnode",
 ]
 
 [project.optional-dependencies]
@@ -37,9 +37,9 @@ dev = [
 members = ["packages/*"]
 
 [tool.uv.sources]
-wire = { workspace = true }
-cryptosuite = { workspace = true }
-nodekit = { workspace = true }
+pqcwire = { workspace = true }
+pqcsuite = { workspace = true }
+pqcnode = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -50,7 +50,7 @@ select = ["E", "F", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
 ignore = ["S101"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["wire", "cryptosuite", "nodekit", "services"]
+known-first-party = ["pqcwire", "pqcsuite", "pqcnode", "services"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "B"]

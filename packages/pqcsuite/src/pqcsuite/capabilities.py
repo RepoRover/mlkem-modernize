@@ -15,7 +15,7 @@ from typing import Any
 
 import cryptography
 
-from wire.protocol import HYBRID_PQC, LEGACY_RSA
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
 
 try:
     from cryptography.hazmat.primitives.asymmetric import mlkem as _mlkem
@@ -62,7 +62,7 @@ class CapabilityReport:
     supported_suites: list[str]
     reason: str | None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "python_version": self.python_version,
             "cryptography_version": self.cryptography_version,

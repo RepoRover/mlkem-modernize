@@ -6,11 +6,11 @@ by the migration, and the same harness measures it so the two are comparable.
 
 from __future__ import annotations
 
-import cryptosuite as cs
+import pqcsuite as cs
 from bench.harness import DEFAULT_ITERATIONS, SuiteBenchmark, Timing
-from wire.frames import b64d
-from wire.protocol import HYBRID_PQC, LEGACY_RSA, suite_spec
-from wire.telemetry import WeatherReading
+from pqcwire.frames import b64d
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA, suite_spec
+from pqcwire.telemetry import WeatherReading
 
 SAMPLE_READING = WeatherReading("2024-01-01", 7.4, 3.4, 1.8, 19.7)
 SAMPLE_PAYLOAD = SAMPLE_READING.to_json().encode()

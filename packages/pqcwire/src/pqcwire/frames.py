@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from wire.protocol import PROTOCOL_VERSION
+from pqcwire.protocol import PROTOCOL_VERSION
 
 # AES-GCM nonces are derived from the sequence number rather than transmitted.
 # A fresh session key per session plus a strictly increasing 96-bit counter

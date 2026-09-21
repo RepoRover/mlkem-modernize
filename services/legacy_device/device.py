@@ -16,14 +16,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-import cryptosuite as cs
-import nodekit
-from nodekit.config import env_bool, env_float, env_int, env_path, env_str
-from wire.telemetry import WeatherReading, load_dataset
+import pqcnode
+import pqcsuite as cs
+from pqcnode.config import env_bool, env_float, env_int, env_path, env_str
+from pqcwire.telemetry import WeatherReading, load_dataset
 
 SERVICE = "legacy-device"
 
-log = nodekit.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
+log = pqcnode.configure(SERVICE, env_str("LOG_LEVEL", "INFO"))
 
 
 class DeviceConfig:

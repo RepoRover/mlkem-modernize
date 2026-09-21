@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  quality:
+    name: Lint, format, and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Mypy (strict)
+        run: uv run mypy packages services bench
+
+  legacy-compat:
+    name: Device packages import on Python 3.9
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install with the device's pinned crypto backend
+        run: |
+          python -m pip install --quiet "cryptography==3.4.8"
+          python -m pip install --quiet --no-deps \
+            ./packages/pqcwire ./packages/pqcnode ./packages/pqcsuite
+      - name: The device must import everything it ships with
+        # Guards the constraint that is easiest to break by accident: modern
+        # syntax slipping into a package the Python 3.9 device installs.
+        run: |
+          python - <<'PY'
+          import pqcsuite, pqcnode, pqcwire
+          from pqcwire import DataFrame, data_aad, load_dataset
+
+          log = pqcnode.configure("ci-probe")
+          pqcnode.bind(log, suite="probe").info("adapter works")
+
+          report = pqcsuite.probe()
+          assert report.mlkem_available is False, "device backend must not have ML-KEM"
+          assert pqcsuite.supported_suites() == ["LEGACY-RSA2048-OAEP-AESGCM"]
+
+          server = pqcsuite.LegacyServer(pqcsuite.generate_private_key())
+          client = pqcsuite.LegacyClient(server.public_key)
+          request, sending = client.open_session()
+          assert server.accept(request).open(sending.seal(b"ok")) == b"ok"
+          print("python 3.9 device surface verified")
+          PY
+
+  test:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: Unit, known-answer, negative, and integration tests
+        run: >
+          uv run pytest -v
+          --cov=packages --cov=services
+          --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+
+  security:
+    name: Static analysis and dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: Bandit
+        run: uv run bandit -c pyproject.toml -r packages services bench -q
+      - name: Audit the modern nodes' dependencies
+        run: uv run pip-audit --progress-spinner off
+      - name: Audit the device's pinned dependencies
+        # Informational only. The device is deliberately frozen on a 2021
+        # crypto build, so this job reports its known vulnerabilities rather
+        # than failing on them; the exposure is tracked in docs/risks.md.
+        continue-on-error: true
+        run: |
+          echo "cryptography==3.4.8" > device-requirements.txt
+          uv run pip-audit --progress-spinner off --no-deps -r device-requirements.txt
+
+  migration:
+    name: Attack verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Baseline must be fully readable
+        run: ./scripts/verify_migration.sh baseline 25
+      - name: Modernized backbone must resist the same attack
+        # The regression that matters. If this passes when it should not, the
+        # post-quantum integration has silently stopped protecting the link.
+        run: ./scripts/verify_migration.sh modern 25
+
+  images:
+    name: Build images for both architectures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Device image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.device
+          platforms: linux/amd64,linux/arm64
+          push: false
+      - name: Service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.service
+          platforms: linux/amd64,linux/arm64
+          push: false

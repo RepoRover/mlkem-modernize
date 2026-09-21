@@ -1,0 +1,36 @@
+# Observability overlay. Layer it onto either deployment:
+#
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.observability.yml up
+#
+# Grafana is at http://localhost:3000 (anonymous viewer access), Prometheus at
+# http://localhost:9090. The dashboard's headline panel is the count of frames
+# accepted under a quantum-vulnerable suite, which is the number a migration is
+# actually trying to drive to zero.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1h
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks: [backbone]
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      # Anonymous viewer access: this is a throwaway test environment, and
+      # requiring a login would only get worked around with a shared password.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks: [backbone]
+    ports: ["3000:3000"]
+    depends_on: [prometheus]

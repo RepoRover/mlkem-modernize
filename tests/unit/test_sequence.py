@@ -1,7 +1,7 @@
 import pytest
 
-from wire.frames import MAX_SEQ, FrameError
-from wire.sequence import ReplayError, SequenceCounter, SequenceGuard
+from pqcwire.frames import MAX_SEQ, FrameError
+from pqcwire.sequence import ReplayError, SequenceCounter, SequenceGuard
 
 
 def test_counter_issues_strictly_increasing_values():

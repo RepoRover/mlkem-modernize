@@ -1,6 +1,6 @@
 """Stdlib-only service scaffolding shared by every node."""
 
-from nodekit.config import (
+from pqcnode.config import (
     ConfigError,
     env_bool,
     env_float,
@@ -8,8 +8,8 @@ from nodekit.config import (
     env_path,
     env_str,
 )
-from nodekit.logs import JsonFormatter, bind, configure, correlation_id
-from nodekit.sessions import SessionNotFound, SessionStore
+from pqcnode.logs import JsonFormatter, bind, configure, correlation_id
+from pqcnode.sessions import SessionNotFound, SessionStore
 
 __all__ = [
     "ConfigError",

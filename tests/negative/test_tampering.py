@@ -8,11 +8,11 @@ suite genuinely fails.
 
 import pytest
 
-import cryptosuite as cs
-from cryptosuite.record import AuthenticationError
-from wire.frames import DataFrame, FrameError, b64d, b64e
-from wire.protocol import HYBRID_PQC, LEGACY_RSA
-from wire.sequence import ReplayError
+import pqcsuite as cs
+from pqcsuite.record import AuthenticationError
+from pqcwire.frames import DataFrame, FrameError, b64d, b64e
+from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
+from pqcwire.sequence import ReplayError
 
 
 @pytest.fixture

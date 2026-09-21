@@ -8,7 +8,7 @@ needed on a lossy datagram transport.
 
 from __future__ import annotations
 
-from wire.frames import MAX_SEQ, FrameError
+from pqcwire.frames import MAX_SEQ, FrameError
 
 
 class ReplayError(FrameError):

@@ -10,13 +10,23 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from typing import Any
+from collections.abc import MutableMapping
+from typing import TYPE_CHECKING, Any
 
 _RESERVED = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None)).keys()) | {
     "message",
     "asctime",
     "taskName",
 }
+
+
+if TYPE_CHECKING:
+    # logging.LoggerAdapter only became subscriptable at runtime in 3.11, so
+    # the parameterised form has to stay behind a type-checking guard for the
+    # device's Python 3.9 to keep importing this module.
+    _AdapterBase = logging.LoggerAdapter[logging.Logger]
+else:
+    _AdapterBase = logging.LoggerAdapter
 
 
 class JsonFormatter(logging.Formatter):
@@ -50,11 +60,13 @@ def configure(service: str, level: str = "INFO") -> logging.Logger:
     return logging.getLogger(service)
 
 
-def bind(logger: logging.Logger, **fields: Any) -> logging.LoggerAdapter:
+def bind(logger: logging.Logger, **fields: Any) -> _AdapterBase:
     """Attach fields that should appear on every record from this adapter."""
 
-    class _Adapter(logging.LoggerAdapter):
-        def process(self, msg: str, kwargs: dict[str, Any]) -> Any:
+    class _Adapter(_AdapterBase):
+        def process(
+            self, msg: str, kwargs: MutableMapping[str, Any]
+        ) -> tuple[str, MutableMapping[str, Any]]:
             extra = dict(self.extra or {})
             extra.update(kwargs.get("extra") or {})
             kwargs["extra"] = extra

@@ -1,8 +1,8 @@
 """The attacker must succeed against the legacy suite, and only with the key."""
 
-import cryptosuite as cs
+import pqcsuite as cs
+from pqcwire.telemetry import WeatherReading
 from services.harvester.attack import harvest
-from wire.telemetry import WeatherReading
 
 READINGS = [
     WeatherReading("2024-01-01", 7.4, 3.4, 1.8, 19.7),
@@ -18,14 +18,10 @@ def _capture(link: str = "edge"):
     client = cs.LegacyClient(server.public_key)
     request, session = client.open_session()
 
-    entries = [
-        {"link": link, "path": "/legacy/session", "request_json": request.to_dict()}
-    ]
+    entries = [{"link": link, "path": "/legacy/session", "request_json": request.to_dict()}]
     for reading in READINGS:
         frame = session.seal(reading.to_json().encode())
-        entries.append(
-            {"link": link, "path": "/legacy/frames", "request_json": frame.to_dict()}
-        )
+        entries.append({"link": link, "path": "/legacy/frames", "request_json": frame.to_dict()})
     return entries, private_key
 
 

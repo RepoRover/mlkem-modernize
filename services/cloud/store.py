@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from wire.telemetry import WeatherReading
+from pqcwire.telemetry import WeatherReading
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
