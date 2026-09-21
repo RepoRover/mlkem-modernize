@@ -1,0 +1,23 @@
+# Development keys are generated, never committed.
+keys/
+*.pem
+
+# Local data
+*.db
+*.sqlite3
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# Benchmark output: the *-latest.* files ARE committed -- they are the "before"
+# baseline the PQC work is compared against. Timestamped archives and coverage
+# dumps are local noise.
+results/coverage.json
+results/*-2*T*Z.json
+
+# Env overrides
+.env

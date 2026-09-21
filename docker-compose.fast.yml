@@ -1,0 +1,12 @@
+# Fast mode: push the whole year through in about 20 seconds and stop.
+# Use for smoke tests and CI rather than watching a 12-minute replay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.fast.yml up --abort-on-container-exit device
+
+services:
+  device:
+    environment:
+      REPLAY_INTERVAL_SECONDS: 0.05
+      LOOP_FOREVER: "false"
+      MAX_RECORDS: 366
+    restart: "no"

@@ -1,0 +1,106 @@
+# Legacy baseline: device -> gateway -> cloud.
+#
+# Startup order matters because the device pins the gateway's public key:
+#   keygen (runs once, writes /keys) -> cloud -> gateway -> device
+#
+# Only the cloud read API is published to the host. The two ingest endpoints
+# stay on the internal network -- they are not authenticated for public exposure.
+
+name: mlkem-modernize-baseline
+
+x-build: &build
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  # Generates development P-256 keys into the shared volume, then exits.
+  # Existing keys are kept, so restarting the stack does not brick the device.
+  keygen:
+    <<: *build
+    environment:
+      SERVICE: keygen
+      KEYS_DIR: /keys
+    volumes:
+      - keys:/keys
+    restart: "no"
+
+  cloud:
+    <<: *build
+    environment:
+      SERVICE: cloud
+      KEYS_DIR: /keys
+      DB_PATH: /var/lib/weather/readings.db
+      PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-600}
+      MAX_RECORDS_PER_SESSION: ${MAX_RECORDS_PER_SESSION:-100}
+    volumes:
+      - keys:/keys:ro
+      - clouddata:/var/lib/weather
+    ports:
+      - "127.0.0.1:8000:8000"   # read API, loopback only
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  gateway:
+    <<: *build
+    environment:
+      SERVICE: gateway
+      KEYS_DIR: /keys
+      GATEWAY_ID: gw-01
+      CLOUD_URL: http://cloud:8000
+      PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-600}
+      MAX_RECORDS_PER_SESSION: ${MAX_RECORDS_PER_SESSION:-100}
+    volumes:
+      - keys:/keys:ro
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+      cloud:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  device:
+    <<: *build
+    environment:
+      SERVICE: device
+      KEYS_DIR: /keys
+      DEVICE_ID: device-berlin-01
+      GATEWAY_URL: http://gateway:8000
+      DATA_FILE: /app/data/weather_data.csv
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Replay pacing. Override for a fast run:
+      #   REPLAY_INTERVAL_SECONDS=0.05 docker compose up
+      # or use docker-compose.fast.yml.
+      REPLAY_INTERVAL_SECONDS: ${REPLAY_INTERVAL_SECONDS:-2.0}
+      LOOP_FOREVER: ${LOOP_FOREVER:-true}
+      MAX_RECORDS: ${MAX_RECORDS:-0}
+    volumes:
+      - keys:/keys:ro
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  keys:
+  clouddata:

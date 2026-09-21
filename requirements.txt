@@ -1,0 +1,7 @@
+# Legacy baseline dependencies.
+# Pinned to minor versions: this is the "before" state and should not drift
+# while the PQC work happens on top of it.
+cryptography>=42.0,<46.0
+fastapi>=0.110,<0.120
+uvicorn[standard]>=0.29,<0.36
+httpx>=0.27,<0.29

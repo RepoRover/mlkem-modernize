@@ -1,0 +1,206 @@
+{
+  "metadata": {
+    "label": "legacy-baseline",
+    "timestamp": "2026-09-21T10:11:23Z",
+    "suite": "ECDH-P256 / ECDSA-P256 / HKDF-SHA256 / AES-256-GCM",
+    "pqc": false,
+    "iterations": 200,
+    "mode": "in-process (no network)",
+    "python": "3.10.11",
+    "platform": "Windows AMD64",
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD"
+  },
+  "primitives": {
+    "ec_keygen_p256": {
+      "iterations": 200,
+      "min_ms": 0.0224,
+      "median_ms": 0.0227,
+      "mean_ms": 0.0234,
+      "p95_ms": 0.0281,
+      "p99_ms": 0.0353,
+      "max_ms": 0.0454,
+      "stdev_ms": 0.0026
+    },
+    "ecdh_p256": {
+      "iterations": 200,
+      "min_ms": 0.0663,
+      "median_ms": 0.0672,
+      "mean_ms": 0.0679,
+      "p95_ms": 0.0725,
+      "p99_ms": 0.0894,
+      "max_ms": 0.0931,
+      "stdev_ms": 0.0033
+    },
+    "ecdsa_sign_p256": {
+      "iterations": 200,
+      "min_ms": 0.0408,
+      "median_ms": 0.0417,
+      "mean_ms": 0.0434,
+      "p95_ms": 0.0566,
+      "p99_ms": 0.0676,
+      "max_ms": 0.0849,
+      "stdev_ms": 0.0058
+    },
+    "ecdsa_verify_p256": {
+      "iterations": 200,
+      "min_ms": 0.0928,
+      "median_ms": 0.0947,
+      "mean_ms": 0.0961,
+      "p95_ms": 0.1025,
+      "p99_ms": 0.1223,
+      "max_ms": 0.1678,
+      "stdev_ms": 0.0072
+    },
+    "hkdf_sha256": {
+      "iterations": 200,
+      "min_ms": 0.0149,
+      "median_ms": 0.0152,
+      "mean_ms": 0.0153,
+      "p95_ms": 0.0156,
+      "p99_ms": 0.0163,
+      "max_ms": 0.0248,
+      "stdev_ms": 0.0008
+    },
+    "pubkey_encode": {
+      "iterations": 200,
+      "min_ms": 0.0071,
+      "median_ms": 0.0072,
+      "mean_ms": 0.0072,
+      "p95_ms": 0.0072,
+      "p99_ms": 0.0073,
+      "max_ms": 0.0142,
+      "stdev_ms": 0.0005
+    },
+    "pubkey_decode": {
+      "iterations": 200,
+      "min_ms": 0.014,
+      "median_ms": 0.0142,
+      "mean_ms": 0.0144,
+      "p95_ms": 0.0147,
+      "p99_ms": 0.0227,
+      "max_ms": 0.0248,
+      "stdev_ms": 0.0012
+    },
+    "aes256gcm_encrypt_reading": {
+      "iterations": 200,
+      "min_ms": 0.0046,
+      "median_ms": 0.0048,
+      "mean_ms": 0.0048,
+      "p95_ms": 0.0049,
+      "p99_ms": 0.005,
+      "max_ms": 0.0051,
+      "stdev_ms": 0.0001
+    },
+    "aes256gcm_decrypt_reading": {
+      "iterations": 200,
+      "min_ms": 0.0086,
+      "median_ms": 0.0088,
+      "mean_ms": 0.0088,
+      "p95_ms": 0.0089,
+      "p99_ms": 0.009,
+      "max_ms": 0.0092,
+      "stdev_ms": 0.0001
+    }
+  },
+  "key_establishment": {
+    "hop1_static_static_ecdh": {
+      "iterations": 200,
+      "min_ms": 0.0891,
+      "median_ms": 0.0915,
+      "mean_ms": 0.0925,
+      "p95_ms": 0.1004,
+      "p99_ms": 0.1038,
+      "max_ms": 0.1678,
+      "stdev_ms": 0.0063
+    },
+    "hop2_ephemeral_ecdhe_mutual_ecdsa": {
+      "iterations": 200,
+      "min_ms": 0.7248,
+      "median_ms": 0.7457,
+      "mean_ms": 0.7816,
+      "p95_ms": 0.9884,
+      "p99_ms": 1.1362,
+      "max_ms": 1.2182,
+      "stdev_ms": 0.094
+    }
+  },
+  "protocol": {
+    "handshakes": {
+      "hop1_handshake_roundtrip": {
+        "iterations": 40,
+        "min_ms": 3.438,
+        "median_ms": 3.9452,
+        "mean_ms": 3.9786,
+        "p95_ms": 4.7421,
+        "p99_ms": 5.0127,
+        "max_ms": 5.1836,
+        "stdev_ms": 0.3845
+      },
+      "hop2_handshake_roundtrip": {
+        "iterations": 40,
+        "min_ms": 4.1734,
+        "median_ms": 4.6391,
+        "mean_ms": 4.7198,
+        "p95_ms": 5.6767,
+        "p99_ms": 5.8956,
+        "max_ms": 6.8999,
+        "stdev_ms": 0.5252
+      }
+    },
+    "messages": {
+      "end_to_end_reading_both_hops": {
+        "iterations": 200,
+        "min_ms": 4.9292,
+        "median_ms": 6.0292,
+        "mean_ms": 6.3239,
+        "p95_ms": 7.941,
+        "p99_ms": 10.8055,
+        "max_ms": 18.3039,
+        "stdev_ms": 1.4844
+      },
+      "hop1_only_reading": {
+        "iterations": 200,
+        "min_ms": 4.7415,
+        "median_ms": 5.69,
+        "mean_ms": 5.9907,
+        "p95_ms": 7.4375,
+        "p99_ms": 8.7094,
+        "max_ms": 32.9445,
+        "stdev_ms": 2.0746
+      }
+    }
+  },
+  "sizes": {
+    "cryptographic_elements_bytes": {
+      "p256_public_key_x962_uncompressed": 65,
+      "ecdsa_p256_signature_der": 71,
+      "handshake_nonce": 16,
+      "session_id": 16,
+      "aead_nonce": 12,
+      "aead_tag": 16,
+      "session_key": 32
+    },
+    "handshake_bytes": {
+      "hop1_client_hello": 122,
+      "hop1_server_hello": 188,
+      "hop1_total": 310,
+      "hop2_client_hello": 316,
+      "hop2_server_hello": 394,
+      "hop2_total": 710
+    },
+    "message_bytes": {
+      "reading_plaintext_json": 233,
+      "reading_ciphertext_with_tag": 249,
+      "hop1_ingest_frame_on_wire": 416,
+      "gateway_envelope_plaintext_json": 347,
+      "gateway_envelope_ciphertext_with_tag": 363
+    },
+    "overhead": {
+      "aead_expansion_bytes": 16,
+      "framing_overhead_bytes": 167,
+      "total_overhead_bytes": 183,
+      "wire_to_plaintext_ratio": 1.785,
+      "base64_expansion_ratio": 1.3333333333333333
+    }
+  }
+}
