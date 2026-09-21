@@ -75,3 +75,22 @@ shape with a different primitive.
 Cost: an extra round trip, an offer store with TTL and single-use semantics, and
 3.3 kB of signature per handshake. Judged worth it; the bandwidth cost is
 recorded in the risk discussion rather than glossed.
+
+## Decision 5 — Secret ordering, changed against the written plan
+
+The approved plan specified the combiner input as `ss_ec ‖ ss_pq`. The
+implementation uses `ss_pq ‖ ss_ec`.
+
+**Reason:** the deployed `X25519MLKEM768` group in TLS places the ML-KEM secret
+first, and matching a shipping standard is worth more than matching a plan
+written before the standard was checked. The suite name already implies that
+order.
+
+**Risk:** this was changed on the basis of recalled convention. Either ordering
+is cryptographically sound provided both ends agree, so nothing is broken
+either way — but the *justification* is only as good as the recollection, and it
+has not been read back against the specification. Flagged for verification in
+[entry 05](05-outstanding-review.md).
+
+Recorded because deviating from an approved plan during implementation is
+exactly the kind of change that disappears if it is not written down.

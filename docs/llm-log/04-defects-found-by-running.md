@@ -102,6 +102,40 @@ Renamed to `pqcwire`, `pqcnode`, `pqcsuite` — all verified unclaimed. Chosen
 over documenting the hazard: a known-and-unfixed supply-chain issue in a
 security project is a weaker outcome than a mechanical rename.
 
+## Smaller items, recorded for completeness
+
+**Generated code called a method it never defined.** `HybridServer.make_offer()`
+invoked `self._expire()`, which did not exist. Caught within seconds by the
+first execution, and a textbook instance of a model writing a plausible call to
+an imaginary helper. Harmless here only because the code was run immediately.
+
+**A test failed for the wrong reason.** `test_tampering_with_the_kem_ciphertext...`
+raised `FrameError: frame belongs to a different session`. The tempting reading
+was that the code was wrong. The *test* was wrong — it sealed a frame with a
+different session's key, so the session-id check fired before the AEAD ever ran,
+and the behaviour under test was never reached.
+
+Worth dwelling on: when the same model writes both the code and the tests, a
+failing test is not evidence about which of the two is broken. A test that fails
+for the wrong reason is only one edit away from a test that *passes* for the
+wrong reason, and that one is invisible.
+
+**A portability assumption in tooling.** `verify_migration.sh` used `${VAR@L}`,
+a bash 4.4 parameter expansion, on a machine whose `/bin/bash` is 3.2. The
+script was rewritten to move the logic into Python rather than patching the
+expansion, since shell portability was not worth defending.
+
+**`docker compose up --build` silently skipped the attacker.** The harvester sits
+behind a `profiles: ["attack"]` guard, so `up --build` never rebuilt it and the
+demo ran a stale image that rejected a newly added flag. Fixed by building the
+profile explicitly. The failure mode is the dangerous kind — old code running
+silently under a command that appears to rebuild everything.
+
+**`pip-audit --strict` was wrong for this repo.** Strict mode fails on any
+dependency it cannot resolve, which includes every local workspace package.
+Caught before CI ran by checking what the flag actually did rather than assuming
+stricter was better.
+
 ## Pattern
 
 Static analysis found none of these. Type checking found none of these. Unit

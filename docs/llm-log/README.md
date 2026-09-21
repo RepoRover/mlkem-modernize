@@ -17,6 +17,7 @@ was assessed rather than trusted.
 | [03](03-cryptographic-subtleties.md) | Two API traps and one standards behaviour |
 | [04](04-defects-found-by-running.md) | Defects that only appeared when the system ran |
 | [05](05-outstanding-review.md) | What still needs human review before submission |
+| [06](06-found-by-a-human-reading-the-output.md) | A correct system reporting itself incorrectly |
 
 ## Method used
 
@@ -35,6 +36,10 @@ by a script CI runs.
 `bench/results/comparison.json` with 300 iterations is worth something, and it
 also showed a 31x regression on the initiator that the optimistic version of the
 sentence would have hidden.
+
+None of the three were sufficient. Entry 06 records a defect that survived all
+of them, because the system was correct and only its *presentation* was wrong —
+found by a team member reading a dashboard, not by any automated check.
 
 ## Honest limitation of this log
 
