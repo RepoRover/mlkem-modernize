@@ -15,6 +15,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 from pydantic import ValidationError
 
 from cloud.config import Settings
@@ -30,6 +31,7 @@ from cloud.errors import (
 from cloud.models import CloudEnvelope
 
 logger = logging.getLogger("cloud")
+tracer = trace.get_tracer("cloud.app")
 MAX_REQUEST_BODY_BYTES = 32 * 1024
 REQUEST_BODY_TIMEOUT_SECONDS = 5
 BEARER_TOKEN = re.compile(r"[A-Za-z0-9._~+/-]+={0,}$", re.ASCII)
@@ -125,32 +127,48 @@ def create_app(
             try:
                 loaded = build_service(settings or Settings.from_environment())
             except ValidationError as error:
+                codes = validation_codes(error)
                 logger.error(
-                    "event=settings_rejected errors=%s", validation_codes(error)
+                    "event=settings_rejected errors=%s",
+                    codes,
+                    extra={"event": "settings_rejected", "errors": codes},
                 )
                 raise RuntimeError("Cloud settings are invalid") from None
             except CloudStartupError as error:
-                logger.error("event=startup_rejected error=%s", error)
+                logger.error(
+                    "event=startup_rejected error=%s",
+                    error,
+                    extra={"event": "startup_rejected", "error": str(error)},
+                )
                 raise RuntimeError("Cloud startup material is invalid") from None
         try:
             await loaded.store.start()
         except DatabaseError:
             raise RuntimeError("Cloud database initialization failed") from None
         app.state.service = loaded
+        key_ids = sorted(loaded.private_keys)
         logger.info(
             "event=settings_keys_loaded gateway_id=%s key_ids=%s",
             loaded.gateway_id,
-            sorted(loaded.private_keys),
+            key_ids,
+            extra={
+                "event": "settings_keys_loaded",
+                "gateway_id": loaded.gateway_id,
+                "key_ids": key_ids,
+            },
         )
-        logger.info("event=service_ready")
+        logger.info("event=service_ready", extra={"event": "service_ready"})
         try:
             yield
         finally:
             try:
                 await loaded.store.close()
             except TimeoutError:
-                logger.warning("event=database_cleanup_timeout")
-            logger.info("event=service_stopping")
+                logger.warning(
+                    "event=database_cleanup_timeout",
+                    extra={"event": "database_cleanup_timeout"},
+                )
+            logger.info("event=service_stopping", extra={"event": "service_stopping"})
 
     app = FastAPI(title="ML-KEM Modernize Cloud", lifespan=lifespan)
     if service is not None:
@@ -167,17 +185,34 @@ def create_app(
     async def observations(request: Request) -> JSONResponse:
         loaded: CloudService = request.app.state.service
         if not _authorized(request, loaded.bearer_token):
-            logger.warning("event=observation_rejected result=authentication")
+            logger.warning(
+                "event=observation_rejected result=authentication",
+                extra={
+                    "event": "observation_rejected",
+                    "result": "authentication",
+                },
+            )
             return JSONResponse(status_code=401, content={"status": "rejected"})
         try:
             envelope = CloudEnvelope.model_validate_json(await _request_body(request))
         except EnvelopeError, ValidationError:
-            logger.warning("event=observation_rejected result=malformed_envelope")
+            logger.warning(
+                "event=observation_rejected result=malformed_envelope",
+                extra={
+                    "event": "observation_rejected",
+                    "result": "malformed_envelope",
+                },
+            )
             return JSONResponse(status_code=400, content={"status": "rejected"})
         if envelope.gateway_id != loaded.gateway_id:
             logger.warning(
                 "event=observation_rejected observation_id=%s result=gateway_identity",
                 envelope.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": envelope.observation_id,
+                    "result": "gateway_identity",
+                },
             )
             return JSONResponse(status_code=400, content={"status": "rejected"})
         private_key = loaded.private_keys.get(envelope.kem_key_id)
@@ -186,36 +221,77 @@ def create_app(
                 "event=key_id_unknown observation_id=%s key_id=%s",
                 envelope.observation_id,
                 envelope.kem_key_id,
+                extra={
+                    "event": "key_id_unknown",
+                    "observation_id": envelope.observation_id,
+                    "key_id": envelope.kem_key_id,
+                },
             )
             return JSONResponse(status_code=400, content={"status": "rejected"})
         try:
-            observation = decrypt_cloud_envelope(envelope, private_key)
+            with tracer.start_as_current_span(
+                "cloud.decrypt",
+                attributes={
+                    "crypto.algorithm": "ML-KEM-768/HKDF-SHA256/AES-256-GCM",
+                    "observation.id": envelope.observation_id,
+                },
+            ):
+                observation = decrypt_cloud_envelope(envelope, private_key)
         except EnvelopeError:
             logger.warning(
                 "event=observation_rejected observation_id=%s result=cryptographic",
                 envelope.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": envelope.observation_id,
+                    "result": "cryptographic",
+                },
             )
             return JSONResponse(status_code=400, content={"status": "rejected"})
         except ObservationValidationError:
             logger.warning(
                 "event=observation_rejected observation_id=%s result=validation",
                 envelope.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": envelope.observation_id,
+                    "result": "validation",
+                },
             )
             return JSONResponse(status_code=422, content={"status": "rejected"})
         try:
-            stored = await loaded.store.insert(observation)
+            with tracer.start_as_current_span(
+                "cloud.store",
+                attributes={"db.system.name": "postgresql"},
+            ) as store_span:
+                stored = await loaded.store.insert(observation)
+                store_span.set_attribute(
+                    "observation.result", "stored" if stored else "duplicate"
+                )
         except DatabaseError:
             logger.error(
                 "event=observation_rejected observation_id=%s result=database",
                 observation.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": observation.observation_id,
+                    "result": "database",
+                },
             )
             return JSONResponse(status_code=503, content={"status": "retry"})
         status = "stored" if stored else "duplicate"
+        event = f"observation_{status}"
         logger.info(
             "event=observation_%s observation_id=%s key_id=%s",
             status,
             observation.observation_id,
             envelope.kem_key_id,
+            extra={
+                "event": event,
+                "observation_id": observation.observation_id,
+                "key_id": envelope.kem_key_id,
+                "result": status,
+            },
         )
         return JSONResponse(
             status_code=201 if stored else 200,

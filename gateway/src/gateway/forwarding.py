@@ -10,6 +10,7 @@ from enum import StrEnum
 
 import httpx
 from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PublicKey
+from opentelemetry import trace
 from pydantic import ValidationError
 
 from gateway.crypto import encrypt_cloud_envelope
@@ -17,6 +18,7 @@ from gateway.errors import PermanentCloudError, TransientCloudError
 from gateway.models import CloudResult, Observation
 
 logger = logging.getLogger("gateway")
+tracer = trace.get_tracer("gateway.forwarding")
 MAX_CLOUD_RESPONSE_BYTES = 32 * 1024
 
 
@@ -101,18 +103,31 @@ class CloudForwarder:
                 "event=forwarding_exhausted observation_id=%s key_id=%s result=deadline",
                 observation.observation_id,
                 self._kem_key_id,
+                extra={
+                    "event": "forwarding_exhausted",
+                    "observation_id": observation.observation_id,
+                    "key_id": self._kem_key_id,
+                    "result": "deadline",
+                },
             )
             raise TransientCloudError("Cloud forwarding deadline expired") from error
 
     async def _forward_with_retries(self, observation: Observation) -> CloudResult:
         """Create a fresh envelope for each bounded Cloud attempt."""
         for attempt in range(1, self._attempts + 1):
-            envelope = encrypt_cloud_envelope(
-                observation,
-                self._gateway_id,
-                self._kem_key_id,
-                self._public_key,
-            )
+            with tracer.start_as_current_span(
+                "gateway.encrypt",
+                attributes={
+                    "crypto.algorithm": "ML-KEM-768/HKDF-SHA256/AES-256-GCM",
+                    "retry.attempt": attempt,
+                },
+            ):
+                envelope = encrypt_cloud_envelope(
+                    observation,
+                    self._gateway_id,
+                    self._kem_key_id,
+                    self._public_key,
+                )
             try:
                 async with asyncio.timeout(self._timeout_seconds):
                     async with self._client.stream(
@@ -163,6 +178,12 @@ class CloudForwarder:
                 observation.observation_id,
                 self._kem_key_id,
                 attempt + 1,
+                extra={
+                    "event": "forwarding_retry",
+                    "observation_id": observation.observation_id,
+                    "key_id": self._kem_key_id,
+                    "attempt": attempt + 1,
+                },
             )
             await asyncio.sleep(delay)
 
@@ -170,6 +191,12 @@ class CloudForwarder:
             "event=forwarding_exhausted observation_id=%s key_id=%s result=attempts",
             observation.observation_id,
             self._kem_key_id,
+            extra={
+                "event": "forwarding_exhausted",
+                "observation_id": observation.observation_id,
+                "key_id": self._kem_key_id,
+                "result": "attempts",
+            },
         )
         raise TransientCloudError("Cloud forwarding attempts exhausted")
 

@@ -10,8 +10,11 @@ post-quantum encryption or a production-security claim.
 Run from this directory as a non-root user. Only Docker with Compose and a POSIX
 shell are required; Python and uv are installed inside the images.
 
+Create the gitignored, machine-local Compose environment once; Compose loads
+`.env` automatically:
+
 ```sh
-export LOCAL_UID=$(id -u) LOCAL_GID=$(id -g)
+printf 'LOCAL_UID=%s\nLOCAL_GID=%s\n' "$(id -u)" "$(id -g)" > .env
 mkdir -p .local/material
 docker compose run --build --rm bootstrap
 docker compose up --build -d --wait
@@ -49,10 +52,58 @@ docker compose run --rm -e MAX_CYCLES=2 -e SEND_INTERVAL_SECONDS=0 device
 docker compose down
 ```
 
-Normal pacing defaults to one second: `SEND_INTERVAL_SECONDS=2 docker compose up -d`.
+Normal pacing defaults to five minutes. Set `SEND_INTERVAL_SECONDS` in `.env`
+to override the 300-second interval.
 A finite cycle replays 366 observations for 2024, then 365 for 2025. Restarts begin
 at cycle zero; first accepted write wins and replay does not add duplicate rows.
 Device is limited to 0.25 CPU and 128 MiB. This does not emulate ESP8266 hardware.
+
+Application logs are JSON Lines on container stdout/stderr. Each line has a stable
+`timestamp`, `service`, `level`, `logger`, and `message`; application events also
+carry allowlisted fields such as `event`, `observation_id`, and `result`. For
+example:
+
+```sh
+docker compose logs --no-log-prefix gateway | jq -Rr 'fromjson? | select(.event == "observation_accepted")'
+```
+
+## Optional live observability
+
+The opt-in Compose overlay runs OpenTelemetry collectors and Grafana's local LGTM
+demo image (Loki logs, Grafana dashboards, Tempo traces, and Prometheus metrics).
+It auto-instruments FastAPI, HTTPX, and asyncpg and adds safe spans around the
+cryptographic and storage stages. Start it instead of the base `up` command:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d
+```
+
+Open <http://127.0.0.1:3000> and sign in with `admin` / `admin`. The provisioned
+**ML-KEM Live Pipeline** dashboard refreshes every two seconds. Search live logs
+by `observation_id`; select a `trace_id` or use **Explore → Tempo** to inspect the
+Device → Gateway → Cloud waterfall and service graph. Generate a short, clear demo
+with:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.observability.yml stop device
+docker compose -f docker-compose.yml -f docker-compose.observability.yml run --rm \
+  -e MAX_CYCLES=1 -e SEND_INTERVAL_SECONDS=0 device
+```
+
+The two segment-local collectors preserve the application's Device/Cloud network
+separation. The LGTM backend bridges the internal observability network to a
+separate dashboard network; only Grafana is published, and only on loopback.
+Telemetry is fail-open and carries
+bounded identifiers, outcomes, timings, and algorithm names—not payloads,
+ciphertext, credentials, or key material. The overlay is a development/demo tool,
+not a production observability deployment.
+
+Stop the observable stack with the same file set. Add `-v` only when you intend
+to delete both PostgreSQL and observability data:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.observability.yml down
+```
 
 ## Verification
 

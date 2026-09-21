@@ -9,20 +9,23 @@ from pydantic import ValidationError
 from gateway.app import create_app
 from gateway.config import Settings
 from gateway.errors import validation_codes
+from gateway.logging_config import configure_json_logging
 
 logger = logging.getLogger("gateway")
 
 
 def main() -> None:
     """Run the Gateway HTTPS service from environment configuration."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s service=gateway level=%(levelname)s %(message)s",
-    )
+    configure_json_logging("gateway")
     try:
         settings = Settings.from_environment()
     except ValidationError as error:
-        logger.error("event=settings_rejected errors=%s", validation_codes(error))
+        codes = validation_codes(error)
+        logger.error(
+            "event=settings_rejected errors=%s",
+            codes,
+            extra={"event": "settings_rejected", "errors": codes},
+        )
         raise SystemExit(1) from None
 
     config = uvicorn.Config(

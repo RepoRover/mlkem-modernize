@@ -9,20 +9,23 @@ from pydantic import ValidationError
 from cloud.app import create_app
 from cloud.config import Settings
 from cloud.errors import validation_codes
+from cloud.logging_config import configure_json_logging
 
 logger = logging.getLogger("cloud")
 
 
 def main() -> None:
     """Run the Cloud HTTPS service from environment configuration."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s service=cloud level=%(levelname)s %(message)s",
-    )
+    configure_json_logging("cloud")
     try:
         settings = Settings.from_environment()
     except ValidationError as error:
-        logger.error("event=settings_rejected errors=%s", validation_codes(error))
+        codes = validation_codes(error)
+        logger.error(
+            "event=settings_rejected errors=%s",
+            codes,
+            extra={"event": "settings_rejected", "errors": codes},
+        )
         raise SystemExit(1) from None
     config = uvicorn.Config(
         create_app(settings=settings),

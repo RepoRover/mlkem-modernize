@@ -1,0 +1,108 @@
+# Optional local demo overlay. The base deployment remains port-free.
+# Run with:
+# docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+
+x-otel-environment: &otel-environment
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: otlp
+  OTEL_LOGS_EXPORTER: otlp
+  OTEL_PROPAGATORS: tracecontext
+  OTEL_SEMCONV_STABILITY_OPT_IN: http
+  OTEL_PYTHON_LOG_CORRELATION: "true"
+  OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: "256"
+  OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT: "64"
+  OTEL_BSP_MAX_QUEUE_SIZE: "256"
+  OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "64"
+  OTEL_BSP_SCHEDULE_DELAY: "1000"
+  OTEL_BSP_EXPORT_TIMEOUT: "3000"
+  OTEL_BLRP_MAX_QUEUE_SIZE: "256"
+  OTEL_BLRP_MAX_EXPORT_BATCH_SIZE: "64"
+  OTEL_BLRP_SCHEDULE_DELAY: "1000"
+  OTEL_BLRP_EXPORT_TIMEOUT: "3000"
+  OTEL_METRIC_EXPORT_INTERVAL: "5000"
+  OTEL_METRIC_EXPORT_TIMEOUT: "3000"
+
+services:
+  device:
+    command: [opentelemetry-instrument, mlkem-device]
+    environment:
+      <<: *otel-environment
+      OTEL_SERVICE_NAME: device
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-device:4318
+      OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: fastapi,asyncpg
+    depends_on:
+      otel-device: {condition: service_started}
+
+  gateway:
+    command: [opentelemetry-instrument, mlkem-gateway]
+    environment:
+      <<: *otel-environment
+      OTEL_SERVICE_NAME: gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-cloud:4318
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: healthz
+      OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: asyncpg
+    depends_on:
+      otel-cloud: {condition: service_started}
+
+  cloud:
+    command: [opentelemetry-instrument, mlkem-cloud]
+    environment:
+      <<: *otel-environment
+      OTEL_SERVICE_NAME: cloud
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-cloud:4318
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: healthz
+      OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: httpx
+    depends_on:
+      otel-cloud: {condition: service_started}
+
+  otel-device:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    mem_limit: 160m
+    command: [--config=/etc/otelcol-contrib/config.yaml]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks: [device_net, observability_net]
+    depends_on:
+      grafana-lgtm: {condition: service_started}
+
+  otel-cloud:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    mem_limit: 160m
+    command: [--config=/etc/otelcol-contrib/config.yaml]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks: [cloud_net, observability_net]
+    depends_on:
+      grafana-lgtm: {condition: service_started}
+
+  grafana-lgtm:
+    image: grafana/otel-lgtm:0.33.1
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [observability_net, dashboard_net]
+    environment:
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /otel-lgtm/grafana/conf/provisioning/dashboards/custom/mlkem-overview.json
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - observability_data:/data
+      - ./observability/mlkem-overview.json:/otel-lgtm/grafana/conf/provisioning/dashboards/custom/mlkem-overview.json:ro
+      - ./observability/dashboards-provisioning.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/custom.yaml:ro
+
+networks:
+  observability_net: {internal: true}
+  dashboard_net: {}
+
+volumes:
+  observability_data:

@@ -106,7 +106,7 @@ services:
       GATEWAY_TIMEOUT_SECONDS: "35"
       CA_CERT_FILE: /run/secrets/ca.crt
       WEATHER_CSV_FILE: /app/device/data/weather_data.csv
-      SEND_INTERVAL_SECONDS: ${SEND_INTERVAL_SECONDS:-1}
+      SEND_INTERVAL_SECONDS: ${SEND_INTERVAL_SECONDS:-300}
       RETRY_INITIAL_SECONDS: "0.25"
       RETRY_MAX_SECONDS: "2"
     volumes:

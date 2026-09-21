@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 from pydantic import ValidationError
 
 from gateway.config import Settings
@@ -30,6 +31,7 @@ from gateway.forwarding import CloudForwarder
 from gateway.models import DeviceEnvelope
 
 logger = logging.getLogger("gateway")
+tracer = trace.get_tracer("gateway.app")
 MAX_REQUEST_BODY_BYTES = 32 * 1024
 REQUEST_BODY_TIMEOUT_SECONDS = 5
 
@@ -165,12 +167,19 @@ def create_app(
                 loaded = build_service(configured)
                 owns_client = True
             except ValidationError as error:
+                codes = validation_codes(error)
                 logger.error(
-                    "event=settings_rejected errors=%s", validation_codes(error)
+                    "event=settings_rejected errors=%s",
+                    codes,
+                    extra={"event": "settings_rejected", "errors": codes},
                 )
                 raise RuntimeError("Gateway settings are invalid") from None
             except GatewayStartupError as error:
-                logger.error("event=startup_rejected error=%s", error)
+                logger.error(
+                    "event=startup_rejected error=%s",
+                    error,
+                    extra={"event": "startup_rejected", "error": str(error)},
+                )
                 raise RuntimeError("Gateway startup material is invalid") from None
         app.state.service = loaded
         logger.info(
@@ -178,14 +187,20 @@ def create_app(
             loaded.device_id,
             loaded.device_key_id,
             loaded.kem_key_id,
+            extra={
+                "event": "settings_keys_loaded",
+                "device_id": loaded.device_id,
+                "key_id": loaded.device_key_id,
+                "kem_key_id": loaded.kem_key_id,
+            },
         )
-        logger.info("event=service_ready")
+        logger.info("event=service_ready", extra={"event": "service_ready"})
         try:
             yield
         finally:
             if owns_client:
                 await loaded.forwarder.close()
-            logger.info("event=service_stopping")
+            logger.info("event=service_stopping", extra={"event": "service_stopping"})
 
     app = FastAPI(title="ML-KEM Modernize Gateway", lifespan=lifespan)
     if service is not None:
@@ -206,38 +221,72 @@ def create_app(
             body = await _request_body(request)
             envelope = DeviceEnvelope.model_validate_json(body)
         except EnvelopeError:
-            logger.warning("event=observation_rejected result=malformed_envelope")
+            logger.warning(
+                "event=observation_rejected result=malformed_envelope",
+                extra={
+                    "event": "observation_rejected",
+                    "result": "malformed_envelope",
+                },
+            )
             return JSONResponse(status_code=400, content={"status": "rejected"})
         except ValidationError as error:
+            codes = validation_codes(error)
             logger.warning(
                 "event=observation_rejected result=malformed_envelope errors=%s",
-                validation_codes(error),
+                codes,
+                extra={
+                    "event": "observation_rejected",
+                    "result": "malformed_envelope",
+                    "errors": codes,
+                },
             )
             return JSONResponse(status_code=400, content={"status": "rejected"})
 
         try:
-            observation = decrypt_device_envelope(
-                envelope,
-                loaded.device_id,
-                loaded.device_key_id,
-                loaded.device_key,
-            )
+            with tracer.start_as_current_span(
+                "gateway.decrypt",
+                attributes={
+                    "crypto.algorithm": "AES-256-GCM",
+                    "observation.id": envelope.observation_id,
+                },
+            ):
+                observation = decrypt_device_envelope(
+                    envelope,
+                    loaded.device_id,
+                    loaded.device_key_id,
+                    loaded.device_key,
+                )
         except EnvelopeError:
             logger.warning(
                 "event=observation_rejected observation_id=%s result=malformed_envelope",
                 envelope.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": envelope.observation_id,
+                    "result": "malformed_envelope",
+                },
             )
             return JSONResponse(status_code=400, content={"status": "rejected"})
         except DeviceAuthenticationError:
             logger.warning(
                 "event=observation_rejected observation_id=%s result=authentication",
                 envelope.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": envelope.observation_id,
+                    "result": "authentication",
+                },
             )
             return JSONResponse(status_code=401, content={"status": "rejected"})
         except ObservationValidationError:
             logger.warning(
                 "event=observation_rejected observation_id=%s result=validation",
                 envelope.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": envelope.observation_id,
+                    "result": "validation",
+                },
             )
             return JSONResponse(status_code=422, content={"status": "rejected"})
 
@@ -247,6 +296,11 @@ def create_app(
             logger.error(
                 "event=observation_rejected observation_id=%s result=upstream_rejected",
                 observation.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": observation.observation_id,
+                    "result": "upstream_rejected",
+                },
             )
             return JSONResponse(
                 status_code=502, content={"status": "upstream_rejected"}
@@ -255,12 +309,22 @@ def create_app(
             logger.warning(
                 "event=observation_rejected observation_id=%s result=retry",
                 observation.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": observation.observation_id,
+                    "result": "retry",
+                },
             )
             return JSONResponse(status_code=503, content={"status": "retry"})
         except Exception:  # noqa: BLE001 - never expose an unexpected error value
             logger.error(
                 "event=observation_rejected observation_id=%s result=internal",
                 observation.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": observation.observation_id,
+                    "result": "internal",
+                },
             )
             return JSONResponse(status_code=503, content={"status": "retry"})
 
@@ -270,6 +334,12 @@ def create_app(
             result.observation_id,
             loaded.kem_key_id,
             result.status,
+            extra={
+                "event": "observation_accepted",
+                "observation_id": result.observation_id,
+                "key_id": loaded.kem_key_id,
+                "result": result.status,
+            },
         )
         return JSONResponse(status_code=status_code, content=result.model_dump())
 

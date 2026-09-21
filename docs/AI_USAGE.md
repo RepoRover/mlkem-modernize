@@ -1,5 +1,37 @@
 # AI Usage Log
 
+## 2026-09-21 — Live observability and JSONL logging
+
+### Significant prompts
+
+> Oberservability is important in this project to demonstrate things were implemented properly. Are there services I can use to demonstrate what was accomplish, how the data is travlling etc.
+
+> If possible jsonl would be better and more readable coming from the local Python logging. Add other elements to support you recommended stack with grafana opentelemetry etc.
+
+> run the application and tell me how to access it.
+
+> Ok how to run all images and are they exposed lcoally
+
+> why do we need to expose id like so, could we make use of dotenv
+
+### Result and decisions
+
+- Added allowlisted JSON Lines logging to Device, Gateway, and Cloud using the standard Python logging package. Records include stable service/event fields and OpenTelemetry trace/span correlation without serializing arbitrary record attributes, request bodies, ciphertext, credentials, or key material.
+- Added OpenTelemetry auto-instrumentation for FastAPI, HTTPX, asyncpg, and logging, plus explicit spans around Device delivery/encryption, Gateway decryption/encryption/forwarding, and Cloud decryption/storage.
+- Added an opt-in Compose overlay with two segment-local OpenTelemetry collectors and Grafana's LGTM demo image, providing Loki logs, Tempo traces, Prometheus metrics, and a provisioned live Grafana dashboard.
+- Preserved the Device/Cloud network boundary by using separate collectors. Runtime testing showed that a container attached only to an internal Docker network could not publish Grafana reliably on this Docker version, so LGTM also joins a separate dashboard network while only `127.0.0.1:3000` is published.
+- Added a machine-local, gitignored `.env` for `LOCAL_UID` and `LOCAL_GID`. Compose loads it automatically; the IDs keep bind-mounted files owned by the invoking non-root host user.
+- Added CI/rendered-Compose checks for collector segmentation, non-root/read-only collector execution, absence of collector secret mounts, and loopback-only Grafana exposure.
+
+### Verification
+
+- Ruff formatting/linting and strict Pyright passed; pytest reported **48 passed, 5 skipped**.
+- Base and observability rendered-Compose security checks passed, and the dashboard JSON was validated.
+- Built and started PostgreSQL, Cloud, Gateway, Device, both collectors, and Grafana LGTM locally.
+- Verified Grafana health and the provisioned **ML-KEM Live Pipeline** dashboard at `http://127.0.0.1:3000`.
+- Verified Loki ingestion, Prometheus HTTP metric series, and a 20-span Tempo trace containing Device, Gateway, and Cloud resources with a shared trace ID.
+- Confirmed only Grafana is host-published; application HTTPS endpoints, PostgreSQL, collectors, Loki, Tempo, and Prometheus remain internal.
+
 ## 2026-09-21 — CI workspace coverage
 
 ### Prompt

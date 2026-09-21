@@ -9,6 +9,7 @@ import ssl
 from enum import StrEnum
 
 import httpx
+from opentelemetry import trace
 
 from device.config import Settings
 from device.crypto import encrypt_observation
@@ -16,6 +17,7 @@ from device.errors import DeviceError
 from device.models import Observation
 
 logger = logging.getLogger("device")
+tracer = trace.get_tracer("device.delivery")
 MAX_GATEWAY_RESPONSE_BYTES = 32 * 1024
 
 
@@ -89,11 +91,31 @@ async def deliver(
     key: bytes,
     observation: Observation,
 ) -> bool:
-    """Deliver one observation, retrying transient failures indefinitely."""
+    """Deliver one observation in a trace, retrying transient failures."""
+    with tracer.start_as_current_span(
+        "device.deliver",
+        attributes={"observation.id": observation.observation_id},
+    ) as span:
+        accepted = await _deliver_with_retries(client, settings, key, observation)
+        span.set_attribute("observation.result", "accepted" if accepted else "rejected")
+        return accepted
+
+
+async def _deliver_with_retries(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    key: bytes,
+    observation: Observation,
+) -> bool:
+    """Implement bounded-response delivery under the parent delivery span."""
     retry = 0
     while True:
         body: object = None
-        envelope = encrypt_observation(observation, settings.device_key_id, key)
+        with tracer.start_as_current_span(
+            "device.encrypt",
+            attributes={"crypto.algorithm": "AES-256-GCM"},
+        ):
+            envelope = encrypt_observation(observation, settings.device_key_id, key)
         try:
             async with asyncio.timeout(settings.gateway_timeout_seconds):
                 async with client.stream(
@@ -127,16 +149,27 @@ async def deliver(
             action = DeliveryAction.RETRY
 
         if action is DeliveryAction.ACCEPT:
+            result = response_status(body)
             logger.info(
                 "event=observation_accepted observation_id=%s result=%s",
                 observation.observation_id,
-                response_status(body),
+                result,
+                extra={
+                    "event": "observation_accepted",
+                    "observation_id": observation.observation_id,
+                    "result": result,
+                },
             )
             return True
         if action is DeliveryAction.SKIP:
             logger.warning(
                 "event=observation_rejected observation_id=%s result=permanent",
                 observation.observation_id,
+                extra={
+                    "event": "observation_rejected",
+                    "observation_id": observation.observation_id,
+                    "result": "permanent",
+                },
             )
             return False
         if action is DeliveryAction.FATAL:
@@ -153,5 +186,11 @@ async def deliver(
             observation.observation_id,
             retry,
             delay,
+            extra={
+                "event": "delivery_retry",
+                "observation_id": observation.observation_id,
+                "attempt": retry,
+                "delay_seconds": round(delay, 3),
+            },
         )
         await asyncio.sleep(delay)

@@ -42,6 +42,9 @@ jobs:
       - name: Validate Compose configuration
         run: docker compose --profile tools config --format json | uv run --no-sync python tools/check_deployment.py
 
+      - name: Validate observability overlay
+        run: docker compose -f docker-compose.yml -f docker-compose.observability.yml config --format json | uv run --no-sync python tools/check_observability.py
+
   build:
     name: Build ${{ matrix.image }} image
     runs-on: ubuntu-latest

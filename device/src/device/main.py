@@ -11,6 +11,7 @@ from device.config import Settings
 from device.dataset import load_dataset, observations_for_cycle
 from device.delivery import deliver
 from device.errors import DeviceError, validation_codes
+from device.logging_config import configure_json_logging
 
 logger = logging.getLogger("device")
 
@@ -37,8 +38,14 @@ async def run(settings: Settings) -> None:
         settings.device_id,
         settings.device_key_id,
         len(sources),
+        extra={
+            "event": "settings_keys_loaded",
+            "device_id": settings.device_id,
+            "key_id": settings.device_key_id,
+            "rows": len(sources),
+        },
     )
-    logger.info("event=service_ready")
+    logger.info("event=service_ready", extra={"event": "service_ready"})
     async with httpx.AsyncClient(
         verify=tls, follow_redirects=False, timeout=None
     ) as client:
@@ -55,28 +62,43 @@ async def run(settings: Settings) -> None:
 
 def main() -> None:
     """Run the Device command-line process from environment configuration."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s service=device level=%(levelname)s %(message)s",
-    )
+    configure_json_logging("device")
     try:
         settings = Settings.from_environment()
     except ValidationError as error:
-        logger.error("event=settings_rejected errors=%s", validation_codes(error))
+        codes = validation_codes(error)
+        logger.error(
+            "event=settings_rejected errors=%s",
+            codes,
+            extra={"event": "settings_rejected", "errors": codes},
+        )
         raise SystemExit(1) from None
 
     try:
         asyncio.run(run(settings))
     except KeyboardInterrupt:
-        logger.info("event=service_stopping result=interrupted")
+        logger.info(
+            "event=service_stopping result=interrupted",
+            extra={"event": "service_stopping", "result": "interrupted"},
+        )
     except DeviceError as error:
-        logger.error("event=fatal error=%s", error)
+        logger.error(
+            "event=fatal error=%s",
+            error,
+            extra={"event": "fatal", "error": str(error)},
+        )
         raise SystemExit(1) from None
     except Exception:  # noqa: BLE001 - never expose an unexpected exception value
-        logger.error("event=fatal error=internal")
+        logger.error(
+            "event=fatal error=internal",
+            extra={"event": "fatal", "error": "internal"},
+        )
         raise SystemExit(1) from None
     else:
-        logger.info("event=service_stopping result=complete")
+        logger.info(
+            "event=service_stopping result=complete",
+            extra={"event": "service_stopping", "result": "complete"},
+        )
 
 
 if __name__ == "__main__":

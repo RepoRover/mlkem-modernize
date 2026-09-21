@@ -73,8 +73,11 @@ def load_dataset(path: Path) -> tuple[Location, list[SourceObservation]]:
                 }
             )
         except ValidationError as error:
+            codes = validation_codes(error)
             logger.error(
-                "event=csv_metadata_rejected errors=%s", validation_codes(error)
+                "event=csv_metadata_rejected errors=%s",
+                codes,
+                extra={"event": "csv_metadata_rejected", "errors": codes},
             )
             raise DeviceError("weather CSV location metadata is invalid") from error
 
@@ -97,7 +100,11 @@ def load_dataset(path: Path) -> tuple[Location, list[SourceObservation]]:
                     )
                 )
             except ValidationError, ValueError:
-                logger.warning("event=csv_row_skipped line=%d", line_number)
+                logger.warning(
+                    "event=csv_row_skipped line=%d",
+                    line_number,
+                    extra={"event": "csv_row_skipped", "line": line_number},
+                )
 
     if not observations:
         raise DeviceError("weather CSV contains no valid observations")
@@ -114,15 +121,25 @@ def observations_for_cycle(
     for source in sources:
         target_year = source.observed_on.year + cycle
         if target_year > 9999:
-            logger.error("event=calendar_range_exhausted cycle=%d", cycle)
+            logger.error(
+                "event=calendar_range_exhausted cycle=%d",
+                cycle,
+                extra={"event": "calendar_range_exhausted", "cycle": cycle},
+            )
             raise DeviceError("calendar range exhausted")
         try:
             observed_on = source.observed_on.replace(year=target_year)
         except ValueError:
+            source_date = source.observed_on.isoformat()
             logger.info(
                 "event=calendar_day_skipped source_date=%s cycle=%d",
-                source.observed_on.isoformat(),
+                source_date,
                 cycle,
+                extra={
+                    "event": "calendar_day_skipped",
+                    "source_date": source_date,
+                    "cycle": cycle,
+                },
             )
             continue
         yield Observation(
