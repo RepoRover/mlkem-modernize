@@ -1,10 +1,20 @@
 # Simulated legacy weather station.
 #
-# Python 3.9 reached end of life in October 2025 and cryptography 3.4.8 dates
-# from August 2021. The combination is deliberate: it is what fielded firmware
-# actually looks like several years after deployment, and it predates ML-KEM
-# by three years. The device therefore cannot negotiate a post-quantum suite
-# no matter how much CPU it is given -- the primitive simply is not there.
+# What blocks this device from post-quantum cryptography is NOT its Python
+# version and NOT its CPU budget. A current cryptography release installs
+# happily on Python 3.9 and ML-KEM-768 keygen costs well under a millisecond,
+# so neither would stop it. The real blockers are the ones that stop fielded
+# hardware in practice:
+#
+#   * the crypto dependency is pinned to an August 2021 build that predates
+#     ML-KEM, and the image is immutable;
+#   * the container has no route to a package index (see the internal network
+#     in the compose file), so it cannot fetch a newer build;
+#   * the root filesystem is read-only, so nothing can be installed at runtime.
+#
+# This is why the gateway has to broker the post-quantum link: the limit is the
+# update path, not the arithmetic. Claiming otherwise would be measurably false
+# and the capability probe tests assert the accurate version.
 FROM python:3.9-slim
 
 ENV PYTHONUNBUFFERED=1 \
