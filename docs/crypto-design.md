@@ -37,8 +37,15 @@ exposure, and the defect a quantum adversary converts into a break.
 
 ## 2. The modernized suite — `MLKEM768-X25519-HKDF-AESGCM`
 
+Before this exchange, the gateway is provisioned out of band with the cloud's
+raw ML-DSA-65 public key. In the Compose deployment a networkless one-shot
+provisioner writes that pin to a dedicated volume, which is mounted read-only at
+`CLOUD_IDENTITY_PUBLIC_KEY_PATH`. The `/pqc/identity` response is diagnostic
+only: the gateway does not request it and it cannot replace the pin.
+
 ```
 gateway                                                        cloud
+  pk_id <- read-only local pin
   <------------ GET /pqc/offer ----------------------------------
   offer = {key_id, ek_mlkem, pk_x25519, sigma}                 (ephemeral, per session)
   sigma = ML-DSA-65-Sign(sk_id, LP(ctx, key_id, ek_mlkem, pk_x25519))
@@ -98,7 +105,10 @@ replayed against the same ephemeral key.
 **ML-DSA-65 over the offer.** Ephemeral keys are useless if an active attacker
 can substitute its own, so the offer is signed by the cloud's long-term identity
 key. Signing post-quantum too avoids a chain that is only as strong as its
-weakest link.
+weakest link. The verifier key must itself be trusted: fetching it from the same
+unauthenticated network as the offer would let a MITM substitute both and sign a
+fully self-consistent forgery. The out-of-band pin closes that bootstrap gap;
+missing, malformed, or non-matching trust material fails closed.
 
 ## 3. The record layer, shared by both suites
 

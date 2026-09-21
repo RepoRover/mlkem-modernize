@@ -31,6 +31,20 @@ x-healthcheck-python: &healthcheck-python
   start_period: 3s
 
 services:
+  # Bootstrap trust locally, before either network endpoint starts. The cloud
+  # private seed and gateway public-key pin live in separate volumes; both are
+  # mounted read-only into the long-running services below.
+  identity-provisioner:
+    <<: *node
+    command: ["python", "-m", "services.identity_provisioner"]
+    environment:
+      CLOUD_IDENTITY_PATH: /run/identity-private/cloud_mldsa.key
+      CLOUD_IDENTITY_PUBLIC_KEY_PATH: /run/identity-public/cloud_mldsa.pub
+    volumes:
+      - cloud-identity-private:/run/identity-private
+      - cloud-identity-public:/run/identity-public
+    network_mode: none
+
   cloud:
     <<: *node
     command: ["python", "-m", "services.cloud"]
@@ -39,13 +53,16 @@ services:
       PORT: "8000"
       CLOUD_DB_PATH: /var/lib/node/readings.db
       CLOUD_KEY_PATH: /var/lib/node/cloud_rsa.pem
-      CLOUD_IDENTITY_PATH: /var/lib/node/cloud_mldsa.key
+      CLOUD_IDENTITY_PATH: /run/identity-private/cloud_mldsa.key
       # Migration complete: quantum-vulnerable traffic is no longer accepted.
       ALLOW_LEGACY_SUITE: "false"
     volumes:
       - cloud-state:/var/lib/node
+      - cloud-identity-private:/run/identity-private:ro
     networks: [backbone]
     ports: ["8000:8000"]
+    depends_on:
+      identity-provisioner: {condition: service_completed_successfully}
     healthcheck:
       <<: *healthcheck-python
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
@@ -79,8 +96,10 @@ services:
       CLOUD_URL: http://tap-backbone:9000
       GATEWAY_KEY_PATH: /var/lib/node/gateway_rsa.pem
       UPSTREAM_SUITE: hybrid
+      CLOUD_IDENTITY_PUBLIC_KEY_PATH: /run/identity-public/cloud_mldsa.pub
     volumes:
       - gateway-state:/var/lib/node
+      - cloud-identity-public:/run/identity-public:ro
     # The gateway straddles both segments. That position is what lets it
     # terminate the device's legacy session and open a separate session onward.
     networks: [edge, backbone]
@@ -174,5 +193,7 @@ networks:
 
 volumes:
   cloud-state:
+  cloud-identity-private:
+  cloud-identity-public:
   gateway-state:
   capture:

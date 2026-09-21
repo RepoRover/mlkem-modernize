@@ -30,6 +30,7 @@ long-term key retroactively opens every archived session — not the method.
 | Same, against the modernized backbone | Reads nothing. ML-KEM ciphertexts carry no classically recoverable secret, and the responder's KEM keys were ephemeral and discarded. |
 | Modify, reorder, replay, or splice frames | Rejected. Suite, session id, and sequence number are all bound into the AEAD tag. Covered in `tests/negative/`. |
 | Substitute its own ephemeral KEM keys | Rejected. The offer is ML-DSA-65 signed by the cloud's long-term identity. |
+| Substitute both `/pqc/identity` and a self-signed offer | Rejected. The gateway verifies against an out-of-band read-only pin and does not fetch `/pqc/identity` for trust. |
 | Replay a captured post-quantum handshake | Rejected. Offers are single-use and expire. |
 | Replay a captured *legacy* handshake under a new label | **Succeeds.** The legacy suite does not bind the handshake to its session id. Documented, tested, and unfixed — it is a property of the baseline. |
 | Exhaust memory by opening sessions | Bounded. Session stores cap both age and count. |

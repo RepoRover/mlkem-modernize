@@ -75,17 +75,25 @@ slipping into those packages is the easiest way to break it by accident.
 2. Device wraps a fresh 32-byte secret under that key and posts the handshake.
 3. Gateway accepts it, then opens its **own** upstream session. With
    `UPSTREAM_SUITE=hybrid` it fetches a signed ephemeral offer from the cloud,
-   verifies the ML-DSA signature, and encapsulates to it.
+   verifies the ML-DSA signature against a locally mounted public-key pin, and
+   encapsulates to it. It never learns trust from `/pqc/identity`.
 4. Each reading: device seals, gateway opens, gateway re-seals under the upstream
    session, cloud opens and persists.
 5. Both taps record every frame in passing.
 
 ## Configuration as the migration switch
 
-Suite selection is configuration, not code. `UPSTREAM_SUITE` takes `hybrid`,
-`legacy`, or `auto`; on `auto` the gateway asks the cloud what it accepts and
-prefers the post-quantum suite. An unreachable peer says nothing about its
-capabilities, so a transient failure assumes the safer suite rather than
-downgrading. `ALLOW_LEGACY_SUITE=false` on the cloud completes the migration by
-refusing quantum-vulnerable traffic outright, and the refusal is visible in logs
-and metrics rather than silent.
+Suite selection is configuration, not code. `UPSTREAM_SUITE` defaults to
+`hybrid`. The old `auto` value remains accepted only as a fail-closed alias for
+`hybrid`: it makes no capability request and never selects the legacy suite.
+Rollback must be an explicit local choice of `UPSTREAM_SUITE=legacy`; an
+unauthenticated peer cannot trigger it. Both `hybrid` and `auto` require
+`CLOUD_IDENTITY_PUBLIC_KEY_PATH` to name a valid out-of-band ML-DSA public key
+and fail startup when local ML-KEM support is absent.
+
+The modern Compose deployment creates the key pair in a networkless one-shot
+provisioner, keeps private and public material in separate volumes, and mounts
+each read-only into the cloud and gateway respectively. A missing, unreadable,
+or malformed pin prevents gateway startup. `ALLOW_LEGACY_SUITE=false` on the
+cloud completes the migration by refusing quantum-vulnerable traffic outright,
+and the refusal is visible in logs and metrics rather than silent.

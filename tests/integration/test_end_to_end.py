@@ -10,9 +10,11 @@ only appear when the services talk to each other.
 import importlib
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import pqcsuite as cs
+from pqcwire.frames import b64e
 from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
 from pqcwire.telemetry import WeatherReading
 
@@ -39,6 +41,11 @@ def _build_gateway(tmp_path, monkeypatch, cloud_app, upstream_suite: str):
     monkeypatch.setenv("GATEWAY_KEY_PATH", str(tmp_path / "gateway_rsa.pem"))
     monkeypatch.setenv("CLOUD_URL", "http://cloud")
     monkeypatch.setenv("UPSTREAM_SUITE", upstream_suite)
+    if upstream_suite != "legacy":
+        private_key = cs.load_identity_private((tmp_path / "cloud_mldsa.key").read_bytes())
+        identity_pin = tmp_path / "cloud_mldsa.pub"
+        identity_pin.write_bytes(cs.serialize_identity_public(private_key.public_key()))
+        monkeypatch.setenv("CLOUD_IDENTITY_PUBLIC_KEY_PATH", str(identity_pin))
 
     import services.gateway.app as gateway_module
 
@@ -90,6 +97,47 @@ def test_readings_reach_the_cloud_over_the_configured_suite(
 
         dates = {row["date"] for row in stored["readings"]}
         assert dates == {reading.date for reading in READINGS}
+
+
+def test_mitm_substituting_identity_and_signed_offer_is_rejected(tmp_path, monkeypatch):
+    """The HTTP identity cannot authorize an attacker-controlled signed offer."""
+    legitimate_cloud = _build_cloud(tmp_path, monkeypatch, allow_legacy=False)
+    attacker = cs.HybridServer(cs.generate_identity_key())
+    identity_requests = 0
+    session_requests = 0
+    mitm = FastAPI()
+
+    @mitm.get("/pqc/identity")
+    def substituted_identity():
+        nonlocal identity_requests
+        identity_requests += 1
+        return {
+            "algorithm": "ML-DSA-65",
+            "public_key": b64e(cs.serialize_identity_public(attacker.identity_public_key)),
+        }
+
+    @mitm.get("/pqc/offer")
+    def substituted_offer():
+        return attacker.make_offer().to_dict()
+
+    @mitm.post("/pqc/session")
+    def substituted_session():
+        nonlocal session_requests
+        session_requests += 1
+        return {"accepted": True}
+
+    gateway_app = _build_gateway(tmp_path, monkeypatch, mitm, "hybrid")
+
+    with TestClient(legitimate_cloud), TestClient(gateway_app) as gateway:
+        pem = gateway.get("/legacy/pubkey").content
+        client = cs.LegacyClient(cs.load_public_key(pem))
+        request, _ = client.open_session()
+        response = gateway.post("/legacy/session", json=request.to_dict())
+
+    assert response.status_code == 502
+    assert "signature" in response.json()["detail"]
+    assert identity_requests == 0
+    assert session_requests == 0
 
 
 def test_gateway_reports_that_it_is_brokering_between_suites(tmp_path, monkeypatch):

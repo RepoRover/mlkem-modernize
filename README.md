@@ -39,6 +39,15 @@ Run the modernized stack and watch a year of weather readings flow:
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
+The one-shot `identity-provisioner` creates the cloud ML-DSA private seed and a
+separate gateway public-key pin before either network service starts. The cloud
+and gateway then receive only their half in read-only volumes. The gateway will
+not start in `hybrid` or `auto` mode if
+`CLOUD_IDENTITY_PUBLIC_KEY_PATH` is absent or malformed; `/pqc/identity` is
+informational and is never a trust bootstrap. `hybrid` is the default; `auto`
+is a fail-closed compatibility alias, and rollback requires explicit
+`UPSTREAM_SUITE=legacy` configuration.
+
 Then query what arrived, and note that nothing quantum-vulnerable reached it:
 
 ```bash

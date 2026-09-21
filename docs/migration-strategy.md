@@ -22,19 +22,28 @@ with `docker compose -f deploy/docker-compose.baseline.yml up --build`.
 Verified exposure: a passive attacker handed the RSA keys reads 100% of frames
 on both links.
 
-### Phase 1 — dual-stack cloud
+### Phase 1 — dual-stack cloud and identity bootstrap
 
-The cloud gains `/pqc/*` endpoints while `/legacy/*` keeps working. Nothing
-changes for existing gateways. This is deployable independently and is the step
-that makes rollback free: a gateway can move to the post-quantum suite and back
-without any cloud change.
+The cloud gains `/pqc/*` endpoints while `/legacy/*` keeps working. Before a
+gateway can use them, the cloud's ML-DSA public identity must be delivered out
+of band and configured as `CLOUD_IDENTITY_PUBLIC_KEY_PATH`. It must not be
+learned from `/pqc/identity`, because a MITM could replace both that response and
+the signed offer. The modern Compose stack models provisioning with a
+networkless one-shot service and separate private/public volumes; long-running
+services mount their half read-only.
+
+Nothing changes for existing legacy gateways. This is deployable independently
+and is the step that makes suite rollback free: a gateway can move to the
+post-quantum suite and back without any cloud code change.
 
 ### Phase 2 — gateway cutover
 
 `UPSTREAM_SUITE` moves from `legacy` to `hybrid`, one gateway at a time. The
-device sees nothing different — it is still speaking the only suite it has. With
-`auto`, a gateway negotiates against the cloud's advertised `accepted_suites`,
-which is how a mixed fleet runs during a staged rollout.
+device sees nothing different — it is still speaking the only suite it has.
+Mixed fleets are staged through explicit per-gateway configuration. The retained
+`auto` value is only a backward-compatible alias for `hybrid`; it does not query
+cloud capabilities or fall back. Operators that previously relied on dynamic
+`auto` negotiation must now select `legacy` explicitly during rollback.
 
 Watch `pqc_frames_total{suite=...}` per gateway to confirm each cutover, and
 `pqc_suite_in_use` to see the configured posture of every link.
@@ -77,11 +86,24 @@ Every phase is reversible by configuration alone.
 | Gateway cannot complete a post-quantum handshake | Set `UPSTREAM_SUITE=legacy` and restart. Requires `ALLOW_LEGACY_SUITE=true` on the cloud, so phase 3 is the point of no easy return. |
 | Cloud rejects post-quantum traffic | Gateway surfaces a 502 and the frame is dropped, not silently downgraded. |
 | ML-KEM flaw discovered | The hybrid construction already covers this: X25519 alone still protects the session, and the suite can be retired without touching the record layer. |
-| Cloud identity key compromised | Ephemeral KEM keys mean past sessions stay secret. Rotate the ML-DSA key; gateways pick up the new identity on their next offer fetch. |
+| Cloud identity key compromised | Ephemeral KEM keys mean past sessions stay secret. Provision a replacement key and pin out of band, then restart cloud and gateways as a coordinated operation. |
 
 The decision to keep the legacy suite implemented rather than deleting it is
 deliberate. It costs a little complexity and buys a working rollback path plus a
 reproducible baseline.
+
+## Identity rotation
+
+A pin makes rotation explicit rather than automatic. This implementation accepts
+one ML-DSA identity at a time and has no overlap set: replacing only the cloud
+key makes every gateway reject its offers, while replacing only the gateway pin
+makes it reject the old cloud. Rotation therefore requires a maintenance window
+(or an external blue/green rollout): stop the modern stack, replace both
+identity volumes through the trusted provisioning path, and restart cloud and
+gateways together. Do not copy a key from `/pqc/identity` during an incident;
+that recreates the network bootstrap vulnerability. Existing session secrecy is
+not affected because KEM keys are ephemeral, but new sessions remain unavailable
+until both sides agree on the new pin.
 
 ## Crypto-agility
 

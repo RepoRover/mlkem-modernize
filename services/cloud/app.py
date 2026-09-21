@@ -117,7 +117,7 @@ def legacy_frame(body: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/pqc/identity")
 def pqc_identity() -> dict[str, str]:
-    """The long-term ML-DSA public key used to sign ephemeral offers."""
+    """Report the signing identity for diagnostics, never trust bootstrap."""
     from pqcwire.frames import b64e
 
     return {

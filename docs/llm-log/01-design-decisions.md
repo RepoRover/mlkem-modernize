@@ -94,3 +94,26 @@ has not been read back against the specification. Flagged for verification in
 
 Recorded because deviating from an approved plan during implementation is
 exactly the kind of change that disappears if it is not written down.
+
+## Decision 6 — identity trust must not arrive over the protected network
+
+**Defect found in review:** the gateway fetched `/pqc/identity` from the same
+unauthenticated HTTP path as `/pqc/offer`. The offer signature was internally
+valid, but it authenticated only the key returned by that connection. A MITM
+could replace both responses, sign its own ephemeral keys, and pass verification.
+
+**Accepted repair:** require the gateway to load the cloud ML-DSA-65 public key
+from an out-of-band file before enabling `hybrid` or `auto`. `/pqc/identity`
+remains a diagnostic endpoint but is absent from the authentication path. The
+Compose deployment uses a networkless provisioning job and separate volumes so
+the cloud private seed and gateway public pin are mounted read-only into their
+respective long-running services. Missing, malformed, and mismatched trust
+material fails closed. `hybrid` is the default; the retained `auto` spelling is
+a fail-closed alias for it rather than unauthenticated capability negotiation.
+Only explicit local `UPSTREAM_SUITE=legacy` configuration can downgrade.
+
+**Rotation implication:** gateways no longer discover a replacement key on the
+next HTTP fetch. The implementation supports one pin, so cloud key and gateway
+pins must be replaced together during a maintenance window (or via an external
+blue/green rollout). This operational cost is intentional: automatic acceptance
+of a network-advertised replacement would restore the original vulnerability.

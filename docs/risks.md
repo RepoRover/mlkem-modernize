@@ -41,12 +41,15 @@ Deliberate: the threat model is a network adversary, and the harvester demo
 needs a readable key file to stand in for Shor's algorithm. A production system
 would use a KMS or HSM and never materialise the private key in process memory.
 
-## R4 — No key rotation
+## R4 — Identity rotation requires coordinated downtime
 
-Long-term RSA and ML-DSA keys are generated once and never rotated. There is no
-rotation schedule, no overlap window, and no revocation path. Ephemeral KEM keys
-limit the blast radius for the post-quantum link, but a compromised ML-DSA
-identity would let an attacker forge offers until it is manually replaced.
+Long-term RSA and ML-DSA keys are generated once and have no automatic rotation
+schedule or revocation path. The gateway now pins the ML-DSA public key out of
+band, closing network bootstrap substitution, but only one pin is supported.
+Rotating it requires replacing the cloud private key and every gateway pin as a
+coordinated maintenance operation; mismatched sides fail closed and cannot open
+new sessions. Ephemeral KEM keys preserve past-session secrecy, but a compromised
+ML-DSA identity can forge offers until that manual rotation completes.
 
 ## R5 — No device authentication
 

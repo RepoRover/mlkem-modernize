@@ -8,12 +8,13 @@ choice, not a code change, which is what makes the rollout reversible.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 
 import pqcsuite as cs
-from pqcwire.frames import DataFrame, b64d
+from pqcwire.frames import DataFrame
 from pqcwire.protocol import HYBRID_PQC, LEGACY_RSA
 
 
@@ -86,57 +87,65 @@ class LegacyUpstream(_HttpUpstream):
 
 
 class HybridUpstream(_HttpUpstream):
-    """Post-quantum relay: ML-KEM-768 + X25519, with per-session ephemeral keys."""
+    """Post-quantum relay authenticated by an out-of-band identity pin."""
 
     suite = HYBRID_PQC
     frames_path = "/pqc/frames"
 
-    def __init__(self, base_url: str, timeout: float = 5.0) -> None:
+    def __init__(self, base_url: str, peer_identity: Any, timeout: float = 5.0) -> None:
         super().__init__(base_url, timeout)
-        self._identity: Any = None
-
-    def _identity_key(self) -> Any:
-        # The long-term identity is cached, but the offers it signs are not:
-        # a fresh offer per session is what provides forward secrecy.
-        if self._identity is None:
-            payload = self._get("/pqc/identity").json()
-            self._identity = cs.load_identity_public(b64d(payload["public_key"]))
-        return self._identity
+        self._peer_identity = peer_identity
 
     def open_session(self) -> tuple[str, cs.RecordSession]:
-        offer = cs.Offer.from_dict(self._get("/pqc/offer").json())
-        client = cs.HybridClient(self._identity_key())
         try:
+            offer = cs.Offer.from_dict(self._get("/pqc/offer").json())
+            client = cs.HybridClient(self._peer_identity)
             request, session = client.open_session(offer)
         except cs.CapabilityError as exc:
             raise UpstreamError(f"this node cannot run {self.suite}: {exc}") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise UpstreamError(f"cloud returned an invalid {self.suite} offer: {exc}") from exc
         self._post("/pqc/session", request.to_dict())
         return request.session_id, session
 
 
-def build_upstream(base_url: str, mode: str, timeout: float = 5.0) -> Upstream:
-    """Select the upstream suite.
+def _load_pinned_identity(path: Path | None) -> Any:
+    if path is None:
+        raise UpstreamError(
+            "CLOUD_IDENTITY_PUBLIC_KEY_PATH is required for hybrid upstream authentication"
+        )
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise UpstreamError(f"cannot read pinned cloud identity key {path}: {exc}") from exc
+    try:
+        return cs.load_identity_public(raw)
+    except (TypeError, ValueError) as exc:
+        raise UpstreamError(f"pinned cloud identity key {path} is malformed: {exc}") from exc
 
-    ``auto`` asks the cloud what it accepts and prefers the post-quantum suite
-    when both ends support it. Falling back silently would be the wrong
-    behaviour for a security control, so the caller logs the outcome.
+
+def build_upstream(
+    base_url: str,
+    mode: str,
+    timeout: float = 5.0,
+    identity_path: Path | None = None,
+) -> Upstream:
+    """Select the upstream suite without network-controlled downgrade.
+
+    ``auto`` is retained as a compatibility alias for ``hybrid``. Selecting the
+    legacy suite always requires explicit local configuration.
     """
     mode = mode.strip().lower()
     if mode == "legacy":
         return LegacyUpstream(base_url, timeout)
-    if mode == "hybrid":
-        return HybridUpstream(base_url, timeout)
-    if mode != "auto":
+    if mode not in {"hybrid", "auto"}:
         raise UpstreamError(f"unknown upstream mode {mode!r}; expected hybrid, legacy, or auto")
 
+    # Load and parse the trust anchor before any network request. Neither
+    # hybrid nor its `auto` alias can silently downgrade to legacy.
+    peer_identity = _load_pinned_identity(identity_path)
     if HYBRID_PQC not in cs.supported_suites():
-        return LegacyUpstream(base_url, timeout)
-    try:
-        accepted = httpx.get(f"{base_url.rstrip('/')}/capabilities", timeout=timeout).json()
-    except (httpx.HTTPError, ValueError):
-        # An unreachable peer says nothing about its capabilities, so assume
-        # the safer suite rather than downgrading on a transient failure.
-        return HybridUpstream(base_url, timeout)
-    if HYBRID_PQC in accepted.get("accepted_suites", []):
-        return HybridUpstream(base_url, timeout)
-    return LegacyUpstream(base_url, timeout)
+        raise UpstreamError(
+            f"this node cannot run {HYBRID_PQC}; set UPSTREAM_SUITE=legacy explicitly to fall back"
+        )
+    return HybridUpstream(base_url, peer_identity, timeout)

@@ -30,10 +30,18 @@ _private_key = cs.load_or_create_rsa(env_path("GATEWAY_KEY_PATH", "run/gateway/g
 _legacy_server = cs.LegacyServer(_private_key)
 # UPSTREAM_SUITE is the migration switch: flipping it from legacy to hybrid
 # modernizes the cloud-facing link without the device knowing anything changed.
+# Hybrid and auto mode require a locally provisioned trust anchor. It is loaded
+# before serving traffic, so a missing or malformed pin prevents startup rather
+# than falling back to a network-fetched identity or to the legacy suite.
+_upstream_mode = env_str("UPSTREAM_SUITE", "hybrid").strip().lower()
+_identity_path = (
+    env_path("CLOUD_IDENTITY_PUBLIC_KEY_PATH") if _upstream_mode in {"hybrid", "auto"} else None
+)
 _upstream = build_upstream(
     env_str("CLOUD_URL", "http://cloud:8000"),
-    env_str("UPSTREAM_SUITE", "auto"),
+    _upstream_mode,
     timeout=env_float("UPSTREAM_TIMEOUT_SECONDS", 5.0),
+    identity_path=_identity_path,
 )
 
 metrics.record_suite(SERVICE, "downstream", _legacy_server.suite)
