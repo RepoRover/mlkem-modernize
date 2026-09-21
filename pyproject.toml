@@ -1,0 +1,63 @@
+[project]
+name = "mlkem-modernize"
+version = "0.1.0"
+description = "ML-KEM legacy modernization: simulated edge device, PQC broker gateway, and cloud service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "wire",
+]
+
+[project.optional-dependencies]
+services = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.28",
+    "prometheus-client>=0.21",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.120",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "bandit>=1.8",
+    "pip-audit>=2.7",
+    # Independent ML-KEM implementation, used ONLY to cross-validate our
+    # cryptography-backed suite. Must never appear in a runtime image.
+    "kyber-py>=1.0",
+]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+wire = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+"packages/wire/**" = ["UP006", "UP035", "UP045"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires the docker compose stack to be running",
+    "slow: long-running benchmark or stress test",
+]

@@ -1,0 +1,65 @@
+"""Stdlib-only protocol layer shared by the legacy device, gateway, and cloud."""
+
+from wire.frames import (
+    MAX_SEQ,
+    NONCE_LENGTH,
+    DataFrame,
+    FrameError,
+    HandshakeRequest,
+    b64d,
+    b64e,
+    canonical,
+    data_aad,
+    lp,
+    dumps,
+    loads,
+    nonce_for_seq,
+)
+from wire.sequence import ReplayError, SequenceCounter, SequenceGuard
+from wire.protocol import (
+    HYBRID_PQC,
+    LEGACY_RSA,
+    PROTOCOL_VERSION,
+    SUITES,
+    SuiteSpec,
+    UnknownSuiteError,
+    suite_spec,
+)
+from wire.telemetry import (
+    DatasetError,
+    StationMetadata,
+    WeatherDataset,
+    WeatherReading,
+    load_dataset,
+)
+
+__all__ = [
+    "HYBRID_PQC",
+    "LEGACY_RSA",
+    "MAX_SEQ",
+    "NONCE_LENGTH",
+    "PROTOCOL_VERSION",
+    "ReplayError",
+    "SequenceCounter",
+    "SequenceGuard",
+    "SUITES",
+    "DataFrame",
+    "DatasetError",
+    "FrameError",
+    "HandshakeRequest",
+    "StationMetadata",
+    "SuiteSpec",
+    "UnknownSuiteError",
+    "WeatherDataset",
+    "WeatherReading",
+    "b64d",
+    "b64e",
+    "canonical",
+    "data_aad",
+    "lp",
+    "dumps",
+    "load_dataset",
+    "loads",
+    "nonce_for_seq",
+    "suite_spec",
+]
