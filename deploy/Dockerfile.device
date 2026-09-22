@@ -1,10 +1,12 @@
 # Simulated legacy weather station.
 #
-# What blocks this device from post-quantum cryptography is NOT its Python
-# version and NOT its CPU budget. A current cryptography release installs
-# happily on Python 3.9 and ML-KEM-768 keygen costs well under a millisecond,
-# so neither would stop it. The real blockers are the ones that stop fielded
-# hardware in practice:
+# The real target device is hardware-limited by the project premise and cannot
+# perform ML-KEM. This host-built image does not emulate that hardware, so its
+# timings or container quotas cannot establish target-hardware feasibility.
+# Python 3.9 alone is also not proof of incapability: a current cryptography
+# release can expose ML-KEM on that interpreter in the host environment.
+#
+# This image models additional field deployment constraints:
 #
 #   * the crypto dependency is pinned to an August 2021 build that predates
 #     ML-KEM, and the image is immutable;
@@ -12,9 +14,8 @@
 #     in the compose file), so it cannot fetch a newer build;
 #   * the root filesystem is read-only, so nothing can be installed at runtime.
 #
-# This is why the gateway has to broker the post-quantum link: the limit is the
-# update path, not the arithmetic. Claiming otherwise would be measurably false
-# and the capability probe tests assert the accurate version.
+# The gateway brokers the post-quantum link under the owner-provided hardware
+# premise and these modeled deployment constraints.
 FROM python:3.9-slim
 
 ENV PYTHONUNBUFFERED=1 \

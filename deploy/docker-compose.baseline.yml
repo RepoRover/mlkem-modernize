@@ -149,9 +149,10 @@ services:
     depends_on:
       tap-edge: {condition: service_healthy}
 
-    # Hardware limits. These make the device's constraints a property of the
-    # deployment rather than a claim in a comment. Note that neither the memory
-    # nor the CPU cap is what prevents ML-KEM -- see Dockerfile.device.
+    # Simulated resource limits approximate the deployment environment; host
+    # behavior under these container quotas is not evidence about target-hardware
+    # ML-KEM feasibility. The read-only filesystem below is an additional modeled
+    # field deployment constraint -- see Dockerfile.device.
     mem_limit: 48m
     memswap_limit: 48m
     cpus: 0.1

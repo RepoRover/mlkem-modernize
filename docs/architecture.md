@@ -12,17 +12,19 @@
 
 ## Why a gateway exists
 
-The device cannot adopt ML-KEM. The reason is specific, and the obvious
-explanation is wrong.
+The real target device is hardware-limited by the project premise and cannot
+perform ML-KEM. This host/container simulation does not reproduce that hardware,
+so its timings, memory observations, and container CPU quota cannot prove or
+disprove target-hardware feasibility.
 
-It is **not** the Python version: `cryptography>=48` installs cleanly on Python
-3.9 and ML-KEM-768 works there, which
-`test_python_version_alone_would_not_have_blocked_mlkem` asserts so nobody can
-quietly restate the convenient version. It is **not** the CPU or memory budget
-either: ML-KEM keygen costs 0.26 ms and the device idles at 20.8 MiB of its
-48 MiB cap.
+The simulation did establish a narrower point: Python 3.9 alone does not prove
+incapability. `cryptography>=48` installs cleanly on Python 3.9 and ML-KEM-768
+works in the host/container environment. The regression
+`test_python_version_alone_would_not_have_blocked_mlkem` prevents the mistaken
+software-version explanation from returning without treating that result as
+hardware evidence.
 
-What blocks it is the update path:
+The deployment also models constraints that block a software upgrade:
 
 1. the crypto dependency is **pinned** to an August 2021 build inside an
    immutable image;
@@ -32,9 +34,9 @@ What blocks it is the update path:
 
 Each is asserted in
 [`tests/integration/test_device_constraints.py`](../tests/integration/test_device_constraints.py).
-This is the ordinary situation for fielded hardware, and it is why
-gateway-brokered migration is the realistic strategy rather than a contrivance:
-you cannot upgrade the fleet, so you upgrade the hop you control.
+The target-hardware premise plus these modeled field constraints are why the
+architecture upgrades the controlled gateway hop rather than the device fleet.
+The simulation validates that architecture, not the physical device's limits.
 
 ## Link topology
 

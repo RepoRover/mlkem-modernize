@@ -49,3 +49,39 @@ def test_rendered_deployment_security_invariants(compose_file, expected_mode):
     assert device["read_only"] is True
     assert any(mount.startswith("/tmp") for mount in device["tmpfs"])
     assert device["environment"]["LOOP_FOREVER"] == "true"
+
+
+@pytest.mark.parametrize(
+    "compose_file",
+    ["deploy/docker-compose.yml", "deploy/docker-compose.baseline.yml"],
+)
+def test_observability_ports_bind_only_to_loopback(compose_file):
+    if DOCKER is None:
+        pytest.skip("docker is not installed")
+    result = subprocess.run(
+        [
+            DOCKER,
+            "compose",
+            "-f",
+            compose_file,
+            "-f",
+            "deploy/docker-compose.observability.yml",
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(result.stderr)
+    services = json.loads(result.stdout)["services"]
+
+    for service_name, expected_port in (("prometheus", 9090), ("grafana", 3000)):
+        ports = services[service_name]["ports"]
+        assert len(ports) == 1
+        assert ports[0]["host_ip"] == "127.0.0.1"
+        assert int(ports[0]["published"]) == expected_port
+        assert ports[0]["target"] == expected_port

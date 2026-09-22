@@ -13,7 +13,7 @@ that cannot.
 
 ## Phases
 
-### Phase 0 — baseline, tagged `v0-legacy`
+### Phase 0 — baseline at commit `7a467db`
 
 Every link uses `LEGACY-RSA2048-OAEP-AESGCM`. Measurements captured before any
 post-quantum work: see [baseline-analysis.md](baseline-analysis.md). Reproduce

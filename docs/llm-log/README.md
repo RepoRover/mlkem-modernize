@@ -19,6 +19,7 @@ was assessed rather than trusted.
 | [05](05-outstanding-review.md) | What still needs human review before submission |
 | [06](06-found-by-a-human-reading-the-output.md) | A correct system reporting itself incorrectly |
 | [07](07-phase-2-hardening.md) | Selective replay, authentication, resource, and HTTP hardening |
+| [08](08-final-workflow.md) | Final recovery, delivery-gate fixes, and independently rerun validation |
 
 ## Method used
 

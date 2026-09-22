@@ -1,13 +1,10 @@
-"""Evidence that the legacy device genuinely cannot adopt ML-KEM itself.
+"""Evidence for the simulated legacy device's deployment constraints.
 
-The claim under test is specific. The device is *not* blocked by its Python
-version or its CPU budget -- a current cryptography release installs on Python
-3.9 and ML-KEM-768 keygen takes well under a millisecond. It is blocked by the
-things that actually freeze fielded firmware: a pinned dependency inside an
-immutable image, no route to a package index, and a read-only root filesystem.
-
-These tests assert that accurate version, so the architecture's justification
-rests on something reproducible rather than on a comfortable assumption.
+The real target device is hardware-limited by project premise and cannot perform
+ML-KEM. These host/container tests cannot prove or disprove that hardware limit.
+They establish only that Python 3.9 alone permits a current ML-KEM-capable
+library, while this modeled deployment has an old pinned dependency in an
+immutable image, no package-index route, and a read-only root filesystem.
 """
 
 import json
@@ -74,7 +71,7 @@ def test_device_image_has_no_mlkem_primitive(device_image):
 
 @requires_docker
 def test_device_cannot_fetch_a_post_quantum_build(device_image):
-    """The blocker is the missing update path, not the Python version."""
+    """The model prevents upgrades through its missing update path."""
     result = _run(
         [
             "run",

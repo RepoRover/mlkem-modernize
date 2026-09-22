@@ -1,10 +1,10 @@
 # Baseline analysis (`v0-legacy`)
 
-Measurements in this document were captured from the tagged `v0-legacy` commit
-before any post-quantum work began. Reproduce them with:
+Measurements in this document were captured from immutable commit `7a467db`
+before any post-quantum work began. Reproduce them from a detached checkout with:
 
 ```bash
-git checkout v0-legacy
+git checkout --detach 7a467db
 uv run python -m bench v0-legacy 200
 uv run pytest tests/unit --cov=packages --cov=services
 docker compose -f deploy/docker-compose.baseline.yml up --build
@@ -30,23 +30,26 @@ cryptographic contexts even though they currently run the same suite.
 
 ## 2. Measured performance
 
-Captured on arm64, Python 3.13.11, cryptography 50.0.1, 200 iterations per
-operation. Full data in [`bench/results/v0-legacy.json`](../bench/results/v0-legacy.json).
+Captured on arm64, Python 3.13.11, cryptography 50.0.1. The benchmark command
+requested 200 iterations. The harness used all 200 for the short operations,
+but deliberately reduced expensive RSA key generation to `200 / 20 = 10`
+samples and the full handshake path to `200 / 4 = 50` samples. Full data is in
+[`bench/results/v0-legacy.json`](../bench/results/v0-legacy.json).
 
-| Operation | Median | p95 | Max |
-|---|---:|---:|---:|
-| RSA-2048 keygen | 46.2049 ms | 152.0524 ms | 152.0524 ms |
-| Handshake, client side (RSA-OAEP encrypt) | 0.0247 ms | 0.0283 ms | 0.0369 ms |
-| Handshake, server side (RSA-OAEP decrypt) | 0.8792 ms | 0.9962 ms | 1.9257 ms |
-| Seal one reading (AES-256-GCM) | 0.0017 ms | 0.0022 ms | 0.0046 ms |
-| Full handshake + seal + open | 0.9177 ms | 1.0258 ms | 1.8669 ms |
+| Operation | Samples | Median | p95 | Max |
+|---|---:|---:|---:|---:|
+| RSA-2048 keygen | 10 | 62.0959 ms | 187.2772 ms | 187.2772 ms |
+| Handshake, client side (RSA-OAEP encrypt) | 200 | 0.0247 ms | 0.0311 ms | 0.0357 ms |
+| Handshake, server side (RSA-OAEP decrypt) | 200 | 0.8776 ms | 0.9955 ms | 1.8696 ms |
+| Seal one reading (AES-256-GCM) | 200 | 0.0017 ms | 0.0020 ms | 0.0127 ms |
+| Full handshake + seal + open | 50 | 0.9193 ms | 1.0237 ms | 2.0883 ms |
 
 Wire sizes: 103 B plaintext reading, 344 B handshake payload (base64 of a 256 B
 RSA ciphertext), 119 B data frame, 16 B AEAD tag overhead.
 
 Two observations matter for the migration. RSA private-key operations cost
 roughly **36x** the public-key ones, so the responder, not the device, carries
-the handshake cost. And keygen is both slow and highly variable — a 3.3x spread
+the handshake cost. And keygen is both slow and highly variable — a ~3.0x spread
 between median and p95 — because RSA key generation searches for primes. ML-KEM
 has no such search, which should make its keygen both faster and far more
 predictable. Those are the specific predictions the post-migration benchmark
@@ -70,18 +73,19 @@ failures that the migration also repairs.
 
 ## 4. What actually constrains the device
 
-This is worth stating precisely, because the obvious explanation is wrong.
+The real target device is hardware-limited by the project premise and cannot
+perform ML-KEM. This repository runs a host/container simulation, not that
+hardware; host timing, memory use, and container quotas therefore cannot prove
+or disprove feasibility on the target.
 
-The device is **not** blocked by its Python version, and **not** by its CPU
-budget. Both were tested:
+One narrower finding is reproducible: Python 3.9 alone does not establish
+incapability. `cryptography>=48` installs on Python 3.9 and ML-KEM-768 works in
+that host/container environment, as asserted by
+`test_python_version_alone_would_not_have_blocked_mlkem`. That result corrects a
+software-version claim; it is not hardware evidence.
 
-- `cryptography>=48` installs cleanly on Python 3.9 and ML-KEM-768 works there
-  — asserted by `test_python_version_alone_would_not_have_blocked_mlkem`.
-- ML-KEM-768 keygen costs well under a millisecond and allocates kilobytes, so
-  a 48 MB / 0.1 CPU budget would not prevent it. The device idles at 20.8 MiB
-  of its 48 MiB cap.
-
-The real blockers are the ones that freeze firmware in the field:
+The simulation models additional field constraints that prevent a software
+upgrade even where the host can execute ML-KEM:
 
 1. The crypto dependency is **pinned** to an August 2021 build inside an
    immutable image.
@@ -91,10 +95,10 @@ The real blockers are the ones that freeze firmware in the field:
 
 Each is asserted in
 [`tests/integration/test_device_constraints.py`](../tests/integration/test_device_constraints.py).
-This is why the architecture needs a gateway at all: the limitation is the
-update path, not the arithmetic. Any device fleet large enough to matter has
-the same property, which is what makes gateway-brokered migration the realistic
-strategy rather than a contrivance.
+Together, the target-hardware premise and the modeled immutable deployment make
+gateway brokering the migration strategy. The simulation validates the protocol
+and deployment shape, but real target-hardware feasibility remains outside its
+evidence.
 
 ## 5. Operational gaps at baseline
 
