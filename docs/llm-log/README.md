@@ -20,6 +20,7 @@ was assessed rather than trusted.
 | [06](06-found-by-a-human-reading-the-output.md) | A correct system reporting itself incorrectly |
 | [07](07-phase-2-hardening.md) | Selective replay, authentication, resource, and HTTP hardening |
 | [08](08-final-workflow.md) | Final recovery, delivery-gate fixes, and independently rerun validation |
+| [09](09-session-prompts-and-outcomes.md) | Verbatim significant prompts with concise outcomes and changed-file summaries |
 
 ## Method used
 
