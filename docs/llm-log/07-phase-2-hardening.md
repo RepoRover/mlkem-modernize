@@ -2,7 +2,7 @@
 
 ## Context provided
 
-A second pass was explicitly limited to replay/session safety, bounded ephemeral
+The model limited this second pass to replay/session safety, bounded ephemeral
 state, version/policy enforcement, gateway initiator authentication, small HTTP
 operational controls, and targeted negative evidence. Two other worktrees were
 provided as idea sources, not as code to merge.
@@ -58,25 +58,18 @@ TLS, or enroll gateways dynamically.
 
 ## Significant prompts preserved from the workflow
 
-The implementation pass began from this user instruction:
+This phase implemented the second half of the user's prompt:
 
-> Continue and complete the interrupted Phase 2 hardening in the existing dirty
-> `frankenstein` worktree. Fully inspect the prior untrusted partial diff,
-> preserve Phase 1 commit `39da4f3`, satisfy all approved security/operational/
-> test/documentation requirements, run feasible validation, and leave a
-> reviewable uncommitted/unpushed diff with an exact completion/validation/risk
-> report.
+> With what we have learned, create a new branch `frankenstein` based on Iurii's branch. Fix the cloud identity bootstrap; once it's fixed, commit your changes. Then continue by adopting the operational hardening from Matheus's branch and the handshake/negative tests from Sebastiaan's branch. Once everything is complete, commit your changes and push the branch to the remote.
 
-The commit gate then supplied this concrete execution instruction:
-
-> Complete the recovered Phase 2 diff on `frankenstein` without redesigning the
-> PoC. Fix these blockers before commit/push: canonical 16-character
-> lowercase-hex session IDs; fail-closed replay-history capacity; sender-side
-> record age/count enforcement; bounded one-time device re-handshake and
-> current-reading retry on local exhaustion or gateway 409; Compose gateway
-> readiness via `/readyz`; strict nonzero/exact-suite/full-rate migration
-> verification plus cloud-storage evidence; and minimal tap byte/time/capture-
-> storage bounds.
+The user gave no further implementation instructions during this phase. The
+model decomposed the prompt into delegated tasks and review gates; the scope
+limits and blocker list described here are the model's own, not the user's.
+Before commit, review required canonical 16-character lowercase-hex session
+IDs, fail-closed replay-history capacity, sender-side record age/count limits,
+one bounded device re-handshake and current-reading retry, Compose readiness
+via `/readyz`, strict migration verification with cloud-storage evidence, and
+tap byte/time/capture-storage bounds.
 
 ## Representative review output and disposition
 

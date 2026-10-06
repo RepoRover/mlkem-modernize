@@ -97,6 +97,9 @@ exactly the kind of change that disappears if it is not written down.
 
 ## Decision 6 — identity trust must not arrive over the protected network
 
+*Added on the `frankenstein` branch in `39da4f3`; Decisions 1–5 are from the
+original `iurii` work.*
+
 **Defect found in review:** the gateway fetched `/pqc/identity` from the same
 unauthenticated HTTP path as `/pqc/offer`. The offer signature was internally
 valid, but it authenticated only the key returned by that connection. A MITM

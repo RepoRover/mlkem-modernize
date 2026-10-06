@@ -19,8 +19,8 @@ was assessed rather than trusted.
 | [05](05-outstanding-review.md) | What still needs human review before submission |
 | [06](06-found-by-a-human-reading-the-output.md) | A correct system reporting itself incorrectly |
 | [07](07-phase-2-hardening.md) | Selective replay, authentication, resource, and HTTP hardening |
-| [08](08-final-workflow.md) | Final recovery, delivery-gate fixes, and independently rerun validation |
-| [09](09-session-prompts-and-outcomes.md) | Verbatim significant prompts with concise outcomes and changed-file summaries |
+| [08](08-final-workflow.md) | Final review fixes and independently rerun validation |
+| [09](09-session-prompts-and-outcomes.md) | Significant prompts with concise outcomes and changed-file summaries |
 
 ## Method used
 
@@ -46,8 +46,11 @@ found by a team member reading a dashboard, not by any automated check.
 
 ## Honest limitation of this log
 
-It was written by the same model that produced the code, so it is not an
-independent review. It is a record of decisions and the evidence behind them.
+Entries 01–06 come from the original `iurii` work. Entries 07–09 and the marked
+additions to 01 and 02 were written during the `frankenstein` session (Pi,
+`gpt-5.6-sol`). In both cases the log was written by the model that produced
+the code, so it is not an independent review. It is a record of decisions and
+the evidence behind them.
 Entry 05 lists what the group should check independently — treating this
 document as sufficient review would reproduce exactly the failure mode the
 assignment is testing for.

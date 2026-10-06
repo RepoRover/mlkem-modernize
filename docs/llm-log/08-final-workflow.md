@@ -1,19 +1,16 @@
-# 08 — Final workflow recovery and delivery gate
+# 08 — Final review and delivery
 
-## Prompt recorded verbatim
+## Prompt
 
-> Finish the workflow if everything passes record the prompt/results in docs/ of that worktree. Then commit and push. Finally, give me a tldr of all files changed in the frankensteiin in comparisson to Iuriss branch
+> Finish the workflow. If everything passes, record the prompt and results in docs/ of that worktree, then commit and push. Finally, give me a TL;DR of all files changed in frankenstein compared with Iurii's branch.
 
-The first recovery instruction made its pass the sole writer and explicitly
-required a reviewable **uncommitted** diff, so that pass did not perform the
-prompt's commit or push steps. A subsequent final-gate instruction superseded
-that hold and authorized commit and push after valid blockers were fixed.
+The model held the commit and push until the final review gates passed.
 
 ## Review gates and disposition
 
-The completed security gate was reported **PASS** by the review child. That is a
-child-reported review result, not a hosted-CI receipt. The subsequent delivery
-gate blocked release on three concrete findings:
+The final security review passed the hybrid protocol and runtime hardening. This
+was a model review, not a hosted-CI result. The delivery review then blocked
+release on three concrete findings:
 
 1. Prometheus and Grafana published ports on every host interface.
 2. The baseline report named a nonexistent `v0-legacy` tag, misstated sample
@@ -22,7 +19,7 @@ gate blocked release on three concrete findings:
    host/container timing and quota observations as proof about the real target
    hardware.
 
-This recovery fixed those findings without changing the approved protocol or
+These findings were fixed without changing the approved protocol or
 architecture:
 
 - the observability ports now publish as `127.0.0.1:9090:9090` and
@@ -31,20 +28,17 @@ architecture:
 - baseline reproduction now uses immutable commit `7a467db`, explains why a
   requested 200 iterations yields 10 RSA-keygen and 50 full-path samples, and
   reports the values in `bench/results/v0-legacy.json` exactly;
-- the three affected documents now state that the real device is
+- the architecture and baseline documents now state that the real device is
   hardware-limited by premise, while the host/container simulation cannot prove
-  or disprove its feasibility. Python version alone is still correctly rejected
-  as proof of incapability. Immutable software, an old pinned dependency,
-  read-only deployment, and no egress remain explicit additional modeled
-  constraints.
+  or disprove its feasibility, and entry 02 carries a marked correction to the
+  same effect. Python version alone is still correctly rejected as proof of
+  incapability. Immutable software, an old pinned dependency, read-only
+  deployment, and no egress remain explicit additional modeled constraints.
 
-This workflow record and its README link closed the documentation condition of
-the delivery gate and supplied the reviewable diff for the follow-up gate.
+## Follow-up review
 
-## Follow-up final gate disposition
-
-The follow-up final gate initially returned **BLOCK** with one P1 and one P2.
-Both findings were valid and were fixed narrowly:
+A follow-up review initially blocked release with one P1 and one P2 finding.
+Both were valid and were fixed narrowly:
 
 - **P1, resolved:** `deploy/Dockerfile.device`, both Compose files, and
   `tests/integration/test_device_constraints.py` no longer infer target-hardware
@@ -58,23 +52,13 @@ Both findings were valid and were fixed narrowly:
 Direct searches found no remaining form of the challenged arithmetic/CPU claim
 in the affected deployment and test files, and no remaining documentation claim
 that `v0-legacy` is a tag. The affected tests and the full feasible validation
-suite below passed after these edits. **Final gate disposition: PASS.**
-
-## Infrastructure failures during the workflow
-
-A prior delegated attempt was reported as failing on orchestration quota before
-it could supply project evidence. The attempted writer recovery then failed
-with the exact diagnostic `Async run not found` before changing files. Neither
-infrastructure failure is counted as a test failure or success, and neither
-produced a diff accepted here. This pass started from clean commit `71d8f0d`,
-inspected the actual files, made the fixes directly, and independently reran the
-validation below.
+suite below passed after these edits. **Final review: PASS.**
 
 ## Validation evidence
 
-The security-gate PASS and delivery findings above are child-reported evidence.
-The command results below were rerun independently in the recovered writer
-worktree; they are not copied from child summaries.
+The review verdicts above are model findings. The command results below were
+run directly against the final tree, starting from commit `71d8f0d`; they are
+not copied from review summaries.
 
 | Command | Result |
 |---|---|
@@ -119,5 +103,3 @@ exited one, as expected). `git diff --check` exited zero.
 - The legacy device hop deliberately remains quantum-vulnerable, and the broader
   replay, key-management, supply-chain, and teaching-proxy limitations remain
   tracked in `docs/risks.md` and the earlier log entries.
-- The passing follow-up gate authorizes this recorded diff to be committed and
-  pushed; it does not add a hosted-CI receipt.

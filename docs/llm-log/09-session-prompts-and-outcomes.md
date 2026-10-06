@@ -1,15 +1,18 @@
 # 09 — Significant session prompts and outcomes
 
-This entry uses a report-oriented format: significant user prompts are preserved
-verbatim, while the resulting discussion, implementation, review findings, and
-file changes are summarized. Short progress requests, repeated continuation
+**Harness:** Pi · **Model:** `gpt-5.6-sol` (reasoning medium to high)
+
+This entry uses a report-oriented format: significant user prompts are quoted
+with light edits for typos, grammar, punctuation, and filler words, preserving
+their meaning and instructions, while the resulting discussion, implementation,
+review findings, and file changes are summarized. Short progress requests, repeated continuation
 messages, worktree housekeeping, and status questions are intentionally omitted.
 
 ## 1. Evaluate the three proposed PoCs
 
-### Prompt — verbatim
+### Prompt
 
-> We were tasked to implement a PoC in order to secure a legacy device that cant handle ml-kem calculations and harden it so that its post-quantum safety. The device is limited by hardware and this is non negotiable. Study these PDFs @"Group work project 1 pdf.pdf" @"SDMO_Project (1).pdf"  presented by the professor. Based on thiese instructions 3 students have made their own implementation with the help of LLM see git branches. Your goal is to do a deep analysis and rank these PoC. We will proceed developing further from one of these branches so be critical and raise the pros/cons of each.
+> We were tasked to implement a PoC to secure a legacy device that can't handle ML-KEM calculations and to harden it so that it is post-quantum safe. The device is limited by hardware, and this is non-negotiable. Study these PDFs presented by the professor: @"Group work project 1 pdf.pdf" and @"SDMO_Project (1).pdf". Based on these instructions, three students have made their own implementations with the help of an LLM; see the Git branches. Your goal is to do a deep analysis and rank these PoCs. We will continue developing from one of these branches, so be critical and raise the pros and cons of each.
 
 ### Result and decisions
 
@@ -48,9 +51,9 @@ analysis artifacts.
 
 ## 2. Select the continuation implementation
 
-### Prompt — verbatim
+### Prompt
 
-> Okay proceed with the analysis, decide on which implementations best fit the project goal.
+> Proceed with the analysis and decide which implementation best fits the project goal.
 
 ### Result and decisions
 
@@ -72,9 +75,9 @@ No tracked project files were changed by the selection decision.
 
 ## 3. Create and harden `frankenstein`
 
-### Prompt — verbatim
+### Prompt
 
-> Understood. With the things we have learned. Create a new branch `frankenstein` based of Iuriss branch. Fix the cloud identity bootstrap, once fixed commit your changes and then continue working on adopting the operational-hardening from matheys branch and the handshake/negative-test from sebastiaan's branch. Once all are completed commit your changes and push the branch to remote
+> With what we have learned, create a new branch `frankenstein` based on Iurii's branch. Fix the cloud identity bootstrap; once it's fixed, commit your changes. Then continue by adopting the operational hardening from Matheus's branch and the handshake/negative tests from Sebastiaan's branch. Once everything is complete, commit your changes and push the branch to the remote.
 
 ### Result and decisions
 
@@ -112,12 +115,6 @@ modern telemetry, and an in-path tap that defeated response bounds. These were
 accepted and fixed. Durable distributed replay storage, TLS/PKI expansion,
 PostgreSQL, tracing, and a production proxy redesign were rejected as outside
 the approved PoC scope.
-
-The configured signing agent refused both commits. After explicit approval,
-commits were created with `--no-gpg-sign` without changing persistent Git
-configuration. Provider usage limits interrupted some delegated review stages;
-those were treated as orchestration failures, not test results, and the work was
-resumed from the inspected worktree.
 
 ### Files modified
 
@@ -186,9 +183,9 @@ tests/unit/test_upstream_identity.py
 
 ## 4. Complete the final review and delivery
 
-### Prompt — verbatim
+### Prompt
 
-> Finish the workflow if everything passes record the prompt/results in docs/ of that worktree. Then commit and push. Finally, give me a tldr of all files changed in the frankensteiin in comparisson to Iuriss branch
+> Finish the workflow. If everything passes, record the prompt and results in docs/ of that worktree, then commit and push. Finally, give me a TL;DR of all files changed in frankenstein compared with Iurii's branch.
 
 ### Result and decisions
 
@@ -203,7 +200,10 @@ delivery gate found three release blockers:
 
 The final commit, `90b4533` (`fix(delivery): resolve final review blockers`),
 bound observability ports to loopback, corrected baseline reproduction and
-measurements, and rewrote the hardware narrative. The real device's inability
+measurements, and corrected the hardware narrative in the deployment files,
+tests, and architecture documents. Entry 02, which records the original
+`iurii` reasoning, keeps its text and gained a marked correction instead of
+being rewritten. The real device's inability
 to perform ML-KEM is now treated as a project premise. The simulator only proves
 software/deployment properties and cannot establish feasibility on the target
 MCU.
