@@ -58,11 +58,155 @@
       "id": 3,
       "type": "table",
       "title": "Suite in use per link",
-      "description": "Configured posture of every link. quantum_resistant=false on the device link is the architecture working as designed, not a misconfiguration.",
-      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
+      "description": "Which cipher suite each link is configured to use. The device link is expected to stay quantum-vulnerable: the device cannot be upgraded, so the gateway accepts its legacy suite and re-encrypts onward with the post-quantum one.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
       "targets": [
-        {"expr": "pqc_suite_in_use", "format": "table", "instant": true, "refId": "A"}
-      ]
+        {
+          "expr": "pqc_suite_in_use",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "Value": true,
+              "service": true
+            },
+            "indexByName": {
+              "direction": 0,
+              "suite": 1,
+              "quantum_resistant": 2
+            },
+            "renameByName": {
+              "direction": "Link",
+              "suite": "Suite",
+              "quantum_resistant": "Quantum-safe"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Link"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "downstream": {
+                        "text": "device → gateway",
+                        "index": 0
+                      },
+                      "upstream": {
+                        "text": "gateway → cloud",
+                        "index": 1
+                      },
+                      "inbound": {
+                        "text": "cloud, inbound",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quantum-safe"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "yes",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "no (expected)",
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Suite"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "MLKEM768-X25519-HKDF-AESGCM": {
+                        "text": "ML-KEM-768 + X25519",
+                        "index": 0
+                      },
+                      "LEGACY-RSA2048-OAEP-AESGCM": {
+                        "text": "RSA-2048 (legacy)",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Link",
+            "desc": true
+          }
+        ]
+      }
     },
     {
       "id": 4,
@@ -95,18 +239,87 @@
     },
     {
       "id": 6,
-      "type": "timeseries",
-      "title": "Handshake duration p95 by suite",
-      "description": "ML-KEM decapsulation is cheaper than RSA decryption, but the hybrid handshake does more work overall on the initiator.",
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 14},
+      "type": "stat",
+      "title": "Handshakes at the cloud, by suite",
+      "description": "How many key exchanges the cloud has completed and how long they took on average. Handshakes are rare by design: one session carries many readings and lasts up to 15 minutes, so a rate-based percentile would stay empty. The average over all handshakes is the honest number for this traffic.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, suite) (rate(pqc_handshake_duration_seconds_bucket[5m])))",
-          "legendFormat": "{{suite}}",
+          "expr": "1000 * sum by (suite) (pqc_handshake_duration_seconds_sum{service=\"cloud\"}) / sum by (suite) (pqc_handshake_duration_seconds_count{service=\"cloud\"})",
+          "legendFormat": "Average time, {{suite}}",
+          "instant": true,
           "refId": "A"
+        },
+        {
+          "expr": "sum by (suite) (pqc_handshake_duration_seconds_count{service=\"cloud\"})",
+          "legendFormat": "Completed, {{suite}}",
+          "instant": true,
+          "refId": "B"
         }
       ],
-      "fieldConfig": {"defaults": {"unit": "s"}}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      },
+      "transformations": [
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "(.*), MLKEM768-X25519-HKDF-AESGCM",
+            "renamePattern": "$1, ML-KEM-768 + X25519"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "(.*), LEGACY-RSA2048-OAEP-AESGCM",
+            "renamePattern": "$1, RSA-2048 (legacy)"
+          }
+        }
+      ]
     },
     {
       "id": 7,
