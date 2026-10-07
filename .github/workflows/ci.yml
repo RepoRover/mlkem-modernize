@@ -1,10 +1,15 @@
 name: CI
 
 on:
+  # Every branch, so work in progress is checked before it reaches a PR.
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# The workflow only reads the repository; nothing it runs should be able to
+# write to it with the job token.
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,15 +17,19 @@ concurrency:
 
 env:
   UV_FROZEN: "1"
+  # Pinned so CI resolves the same tool as local development.
+  UV_VERSION: "0.12.23"
 
 jobs:
   quality:
     name: Lint, format, and types
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --all-extras
       - name: Ruff lint
@@ -33,6 +42,7 @@ jobs:
   legacy-compat:
     name: Device packages import on Python 3.9
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -68,10 +78,12 @@ jobs:
   test:
     name: Tests and coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --all-extras
       - name: Unit, known-answer, negative, and integration tests
@@ -88,10 +100,12 @@ jobs:
   security:
     name: Static analysis and dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --all-extras
       - name: Bandit
@@ -110,6 +124,7 @@ jobs:
   migration:
     name: Attack verification
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Baseline must be fully readable
@@ -122,6 +137,7 @@ jobs:
   images:
     name: Build images for both architectures
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
